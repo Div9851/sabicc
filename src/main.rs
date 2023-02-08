@@ -41,22 +41,41 @@ impl Token {
 #[derive(Debug)]
 struct ParseError {
     loc: usize,
-    msg: &'static str,
+    msg: String,
 }
 
-fn get_number(tok: &Token) -> Result<i32, ParseError> {
-    if tok.kind != TokenKind::NUM {
-        Err(ParseError {
-            loc: tok.loc,
-            msg: "expected a number",
-        })
+fn consume(tok: &mut &Token, op: &str) -> bool {
+    if tok.kind == TokenKind::PUNCT && tok.text == op {
+        *tok = tok.next.as_ref().unwrap();
+        true
     } else {
-        Ok(tok.val.unwrap())
+        false
     }
 }
 
-fn equal(tok: &Token, op: &str) -> bool {
-    tok.text == op
+fn expect(tok: &mut &Token, op: &str) -> Result<(), ParseError> {
+    if tok.kind == TokenKind::PUNCT && tok.text == op {
+        *tok = tok.next.as_ref().unwrap();
+        Ok(())
+    } else {
+        Err(ParseError {
+            loc: tok.loc,
+            msg: format!("'{}' expected", op),
+        })
+    }
+}
+
+fn expect_number(tok: &mut &Token) -> Result<i32, ParseError> {
+    if tok.kind == TokenKind::NUM {
+        let num = tok.val.unwrap();
+        *tok = tok.next.as_ref().unwrap();
+        Ok(num)
+    } else {
+        Err(ParseError {
+            loc: tok.loc,
+            msg: "expected a number".to_owned(),
+        })
+    }
 }
 
 fn tokenize(text: &str) -> Result<Box<Token>, ParseError> {
@@ -86,7 +105,13 @@ fn tokenize(text: &str) -> Result<Box<Token>, ParseError> {
         }
 
         // Punctuator
-        if bytes[pos] == b'+' || bytes[pos] == b'-' {
+        if bytes[pos] == b'+'
+            || bytes[pos] == b'-'
+            || bytes[pos] == b'*'
+            || bytes[pos] == b'/'
+            || bytes[pos] == b'('
+            || bytes[pos] == b')'
+        {
             let tok = Token::new(TokenKind::PUNCT, pos, &text[pos..pos + 1]);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
@@ -96,7 +121,7 @@ fn tokenize(text: &str) -> Result<Box<Token>, ParseError> {
 
         return Err(ParseError {
             loc: pos,
-            msg: "invalid token",
+            msg: "invalid token".to_owned(),
         });
     }
     cur.next = Some(Token::new(TokenKind::EOF, pos, ""));
@@ -104,34 +129,107 @@ fn tokenize(text: &str) -> Result<Box<Token>, ParseError> {
     Ok(head.next.unwrap())
 }
 
-fn parse(tok: &Token) -> Result<String, ParseError> {
-    let mut cur = tok;
-    let mut result = String::new();
-    result += ".intel_syntax noprefix\n";
-    result += ".globl main\n";
-    result += "main:\n";
-    result += &format!("  mov rax, {}\n", get_number(cur)?);
-    cur = cur.next.as_ref().unwrap();
-    while cur.kind != TokenKind::EOF {
-        if equal(cur, "+") {
-            cur = cur.next.as_ref().unwrap();
-            result += &format!("  add rax, {}\n", get_number(cur)?);
-            cur = cur.next.as_ref().unwrap();
-            continue;
-        }
-        if equal(cur, "-") {
-            cur = cur.next.as_ref().unwrap();
-            result += &format!("  sub rax, {}\n", get_number(cur)?);
-            cur = cur.next.as_ref().unwrap();
-            continue;
-        }
-        return Err(ParseError {
-            loc: cur.loc,
-            msg: "unexpected token",
-        });
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeKind {
+    ADD, // +
+    SUB, // -
+    MUL, // *
+    DIV, // /
+    NUM, // Integer
+}
+
+struct Node {
+    kind: NodeKind,         // Node kind
+    lhs: Option<Box<Node>>, // Left-hand side
+    rhs: Option<Box<Node>>, // Right-hand side
+    val: Option<i32>,       // Used if kind == ND_NUM
+}
+
+impl Node {
+    fn new(kind: NodeKind, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
+        Box::new(Node {
+            kind,
+            lhs: Some(lhs),
+            rhs: Some(rhs),
+            val: None,
+        })
     }
-    result += "  ret";
-    Ok(result)
+    fn new_num(val: i32) -> Box<Node> {
+        Box::new(Node {
+            kind: NodeKind::NUM,
+            lhs: None,
+            rhs: None,
+            val: Some(val),
+        })
+    }
+}
+
+fn expr(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
+    let mut node = mul(tok)?;
+    loop {
+        if consume(tok, "+") {
+            node = Node::new(NodeKind::ADD, node, mul(tok)?);
+            continue;
+        }
+        if consume(tok, "-") {
+            node = Node::new(NodeKind::SUB, node, mul(tok)?);
+            continue;
+        }
+        break Ok(node);
+    }
+}
+
+fn mul(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
+    let mut node = primary(tok)?;
+    loop {
+        if consume(tok, "*") {
+            node = Node::new(NodeKind::MUL, node, primary(tok)?);
+            continue;
+        }
+        if consume(tok, "/") {
+            node = Node::new(NodeKind::DIV, node, primary(tok)?);
+            continue;
+        }
+        break Ok(node);
+    }
+}
+
+fn primary(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
+    if consume(tok, "(") {
+        let node = expr(tok)?;
+        expect(tok, ")")?;
+        Ok(node)
+    } else {
+        Ok(Node::new_num(expect_number(tok)?))
+    }
+}
+
+fn gen(node: &Node) {
+    if node.kind == NodeKind::NUM {
+        println!("  push {}", node.val.unwrap());
+        return;
+    }
+    gen(node.lhs.as_ref().unwrap());
+    gen(node.rhs.as_ref().unwrap());
+    println!("  pop rdi");
+    println!("  pop rax");
+    match node.kind {
+        NodeKind::ADD => {
+            println!("  add rax, rdi");
+        }
+        NodeKind::SUB => {
+            println!("  sub rax, rdi");
+        }
+        NodeKind::MUL => {
+            println!("  imul rax, rdi");
+        }
+        NodeKind::DIV => {
+            println!("  cqo");
+            println!("  idiv rdi");
+        }
+        _ => {}
+    };
+    println!("  push rax");
 }
 
 fn main() {
@@ -149,13 +247,19 @@ fn main() {
             exit(1);
         }
     };
-    let result = match parse(&tok) {
-        Ok(result) => result,
+    let mut rest = tok.as_ref();
+    let node = match expr(&mut rest) {
+        Ok(node) => node,
         Err(err) => {
             eprintln!("{}", text);
             eprintln!("{}^ {}", " ".repeat(err.loc), err.msg);
             exit(1);
         }
     };
-    println!("{}", result);
+    println!(".intel_syntax noprefix");
+    println!(".globl main");
+    println!("main:");
+    gen(&node);
+    println!("  pop rax");
+    println!("  ret")
 }
