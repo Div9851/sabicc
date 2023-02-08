@@ -42,7 +42,7 @@ fn get_number(tok: &Token) -> i32 {
     tok.val.unwrap()
 }
 
-fn equal(tok: &Token, op: &'static [u8]) -> bool {
+fn equal(tok: &Token, op: &[u8]) -> bool {
     tok.text == op
 }
 
