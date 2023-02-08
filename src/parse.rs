@@ -23,6 +23,10 @@ pub enum Stmt {
 }
 
 pub enum Expr {
+    Assign {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     Binary {
         op: BinaryOperator,
         lhs: Box<Expr>,
@@ -32,6 +36,7 @@ pub enum Expr {
         op: UnaryOperator,
         expr: Box<Expr>,
     },
+    Var(usize),
     Num(i32),
 }
 
@@ -41,6 +46,9 @@ impl Expr {
     }
     fn new_unary(op: UnaryOperator, expr: Box<Expr>) -> Box<Expr> {
         Box::new(Expr::Unary { op, expr })
+    }
+    fn new_var(offset: usize) -> Box<Expr> {
+        Box::new(Expr::Var(offset))
     }
     fn new_num(val: i32) -> Box<Expr> {
         Box::new(Expr::Num(val))
@@ -77,6 +85,16 @@ fn consume_number(tok: &mut &Token) -> Option<i32> {
     }
 }
 
+fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a str> {
+    if tok.kind == TokenKind::Ident {
+        let name = &tok.text;
+        *tok = tok.next.as_ref().unwrap();
+        Some(name)
+    } else {
+        None
+    }
+}
+
 pub fn stmt(tok: &mut &Token) -> Result<Box<Stmt>, Error> {
     let node = Box::new(Stmt::ExprStmt(expr(tok)?));
     expect(tok, ";")?;
@@ -84,7 +102,18 @@ pub fn stmt(tok: &mut &Token) -> Result<Box<Stmt>, Error> {
 }
 
 fn expr(tok: &mut &Token) -> Result<Box<Expr>, Error> {
-    equality(tok)
+    assign(tok)
+}
+
+// assign = equality ("=" assign)?
+fn assign(tok: &mut &Token) -> Result<Box<Expr>, Error> {
+    let lhs = equality(tok)?;
+    if consume(tok, "=") {
+        let rhs = assign(tok)?;
+        Ok(Box::new(Expr::Assign { lhs, rhs }))
+    } else {
+        Ok(lhs)
+    }
 }
 
 fn equality(tok: &mut &Token) -> Result<Box<Expr>, Error> {
@@ -171,9 +200,17 @@ fn primary(tok: &mut &Token) -> Result<Box<Expr>, Error> {
         expect(tok, ")")?;
         return Ok(expr);
     }
+
     if let Some(val) = consume_number(tok) {
         return Ok(Expr::new_num(val));
     }
+
+    if let Some(name) = consume_ident(tok) {
+        let bytes = name.as_bytes();
+        let offset = ((bytes[0] - b'a' + 1) * 8) as usize;
+        return Ok(Expr::new_var(offset));
+    }
+
     Err(Error {
         loc: tok.loc,
         msg: "expected an expression".to_owned(),

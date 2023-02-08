@@ -1,4 +1,7 @@
-use crate::parse::{BinaryOperator, Expr, Stmt, UnaryOperator};
+use crate::{
+    error::Error,
+    parse::{BinaryOperator, Expr, Stmt, UnaryOperator},
+};
 
 fn push() {
     println!("  push rax");
@@ -8,20 +11,28 @@ fn pop(reg: &str) {
     println!("  pop {}", reg);
 }
 
-pub fn gen_stmt(stmt: &Stmt) {
+pub fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
     match stmt {
         Stmt::ExprStmt(expr) => {
-            gen_expr(expr);
+            gen_expr(expr)?;
+            Ok(())
         }
     }
 }
 
-pub fn gen_expr(expr: &Expr) {
+pub fn gen_expr(expr: &Expr) -> Result<(), Error> {
     match expr {
-        Expr::Binary { op, lhs, rhs } => {
-            gen_expr(rhs);
+        Expr::Assign { lhs, rhs } => {
+            gen_addr(lhs)?;
             push();
-            gen_expr(lhs);
+            gen_expr(rhs)?;
+            pop("rdi");
+            println!("  mov [rdi], rax");
+        }
+        Expr::Binary { op, lhs, rhs } => {
+            gen_expr(rhs)?;
+            push();
+            gen_expr(lhs)?;
             pop("rdi");
             match op {
                 BinaryOperator::ADD => {
@@ -57,18 +68,34 @@ pub fn gen_expr(expr: &Expr) {
                     println!("  setle al");
                     println!("  movzb rax, al");
                 }
-            }
+            };
         }
         Expr::Unary { op, expr } => {
-            gen_expr(expr);
+            gen_expr(expr)?;
             match op {
                 UnaryOperator::NEG => {
                     println!("  neg rax");
                 }
-            }
+            };
+        }
+        Expr::Var(_) => {
+            gen_addr(expr)?;
+            println!("  mov rax, [rax]");
         }
         Expr::Num(val) => {
             println!("  mov rax, {}", val);
         }
+    };
+    Ok(())
+}
+
+fn gen_addr(expr: &Expr) -> Result<(), Error> {
+    if let Expr::Var(offset) = expr {
+        println!("  lea rax, [rbp-{}]", offset);
+        return Ok(());
     }
+    Err(Error {
+        loc: 0,
+        msg: "not an lvalue".to_owned(),
+    })
 }

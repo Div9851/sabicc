@@ -2,6 +2,7 @@ use crate::error::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
+    Ident,    // Identifiers
     Punct,    // Punctuators
     Num(i32), // Numeric literals
     EOF,      // End-of-file markers
@@ -73,6 +74,15 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
             pos += punct_len;
+            continue;
+        }
+
+        // Identifier
+        if b'a' <= bytes[pos] && bytes[pos] <= b'z' {
+            let tok = Token::new(TokenKind::Ident, pos, &text[pos..pos + 1]);
+            cur.next = Some(tok);
+            cur = cur.next.as_mut().unwrap();
+            pos += 1;
             continue;
         }
 
