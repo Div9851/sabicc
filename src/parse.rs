@@ -18,6 +18,10 @@ pub enum UnaryOperator {
     NEG, // -
 }
 
+pub enum Stmt {
+    ExprStmt(Box<Expr>),
+}
+
 pub enum Expr {
     Binary {
         op: BinaryOperator,
@@ -73,7 +77,13 @@ fn consume_number(tok: &mut &Token) -> Option<i32> {
     }
 }
 
-pub fn expr(tok: &mut &Token) -> Result<Box<Expr>, Error> {
+pub fn stmt(tok: &mut &Token) -> Result<Box<Stmt>, Error> {
+    let node = Box::new(Stmt::ExprStmt(expr(tok)?));
+    expect(tok, ";")?;
+    Ok(node)
+}
+
+fn expr(tok: &mut &Token) -> Result<Box<Expr>, Error> {
     equality(tok)
 }
 

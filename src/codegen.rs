@@ -1,4 +1,4 @@
-use crate::parse::{BinaryOperator, Expr, UnaryOperator};
+use crate::parse::{BinaryOperator, Expr, Stmt, UnaryOperator};
 
 fn push() {
     println!("  push rax");
@@ -8,8 +8,16 @@ fn pop(reg: &str) {
     println!("  pop {}", reg);
 }
 
-pub fn gen_expr(node: &Expr) {
-    match node {
+pub fn gen_stmt(stmt: &Stmt) {
+    match stmt {
+        Stmt::ExprStmt(expr) => {
+            gen_expr(expr);
+        }
+    }
+}
+
+pub fn gen_expr(expr: &Expr) {
+    match expr {
         Expr::Binary { op, lhs, rhs } => {
             gen_expr(rhs);
             push();
