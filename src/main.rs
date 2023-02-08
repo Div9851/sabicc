@@ -65,16 +65,27 @@ fn expect(tok: &mut &Token, op: &str) -> Result<(), ParseError> {
     }
 }
 
-fn expect_number(tok: &mut &Token) -> Result<i32, ParseError> {
+fn consume_number(tok: &mut &Token) -> Option<i32> {
     if tok.kind == TokenKind::NUM {
         let num = tok.val.unwrap();
         *tok = tok.next.as_ref().unwrap();
-        Ok(num)
+        Some(num)
     } else {
-        Err(ParseError {
-            loc: tok.loc,
-            msg: "expected a number".to_owned(),
-        })
+        None
+    }
+}
+
+fn read_punct(bytes: &[u8]) -> usize {
+    if bytes.starts_with(b"==")
+        || bytes.starts_with(b"!=")
+        || bytes.starts_with(b"<=")
+        || bytes.starts_with(b">=")
+    {
+        2
+    } else if bytes[0].is_ascii_punctuation() {
+        1
+    } else {
+        0
     }
 }
 
@@ -105,17 +116,12 @@ fn tokenize(text: &str) -> Result<Box<Token>, ParseError> {
         }
 
         // Punctuator
-        if bytes[pos] == b'+'
-            || bytes[pos] == b'-'
-            || bytes[pos] == b'*'
-            || bytes[pos] == b'/'
-            || bytes[pos] == b'('
-            || bytes[pos] == b')'
-        {
-            let tok = Token::new(TokenKind::PUNCT, pos, &text[pos..pos + 1]);
+        let punct_len = read_punct(&bytes[pos..]);
+        if punct_len > 0 {
+            let tok = Token::new(TokenKind::PUNCT, pos, &text[pos..pos + punct_len]);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
-            pos += 1;
+            pos += punct_len;
             continue;
         }
 
@@ -135,6 +141,11 @@ enum NodeKind {
     SUB, // -
     MUL, // *
     DIV, // /
+    NEG, // unary -
+    EQ,  // ==
+    NE,  // !=
+    LT,  // <
+    LE,  // <=
     NUM, // Integer
 }
 
@@ -146,11 +157,19 @@ struct Node {
 }
 
 impl Node {
-    fn new(kind: NodeKind, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
+    fn new_binary(kind: NodeKind, lhs: Box<Node>, rhs: Box<Node>) -> Box<Node> {
         Box::new(Node {
             kind,
             lhs: Some(lhs),
             rhs: Some(rhs),
+            val: None,
+        })
+    }
+    fn new_unary(kind: NodeKind, expr: Box<Node>) -> Box<Node> {
+        Box::new(Node {
+            kind,
+            lhs: Some(expr),
+            rhs: None,
             val: None,
         })
     }
@@ -165,14 +184,56 @@ impl Node {
 }
 
 fn expr(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
+    equality(tok)
+}
+
+fn equality(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
+    let mut node = relational(tok)?;
+    loop {
+        if consume(tok, "==") {
+            node = Node::new_binary(NodeKind::EQ, node, relational(tok)?);
+            continue;
+        }
+        if consume(tok, "!=") {
+            node = Node::new_binary(NodeKind::NE, node, relational(tok)?);
+            continue;
+        }
+        break Ok(node);
+    }
+}
+
+fn relational(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
+    let mut node = add(tok)?;
+    loop {
+        if consume(tok, "<") {
+            node = Node::new_binary(NodeKind::LT, node, add(tok)?);
+            continue;
+        }
+        if consume(tok, "<=") {
+            node = Node::new_binary(NodeKind::LE, node, add(tok)?);
+            continue;
+        }
+        if consume(tok, ">") {
+            node = Node::new_binary(NodeKind::LT, add(tok)?, node);
+            continue;
+        }
+        if consume(tok, ">=") {
+            node = Node::new_binary(NodeKind::LE, add(tok)?, node);
+            continue;
+        }
+        break Ok(node);
+    }
+}
+
+fn add(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
     let mut node = mul(tok)?;
     loop {
         if consume(tok, "+") {
-            node = Node::new(NodeKind::ADD, node, mul(tok)?);
+            node = Node::new_binary(NodeKind::ADD, node, mul(tok)?);
             continue;
         }
         if consume(tok, "-") {
-            node = Node::new(NodeKind::SUB, node, mul(tok)?);
+            node = Node::new_binary(NodeKind::SUB, node, mul(tok)?);
             continue;
         }
         break Ok(node);
@@ -180,17 +241,27 @@ fn expr(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
 }
 
 fn mul(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
-    let mut node = primary(tok)?;
+    let mut node = unary(tok)?;
     loop {
         if consume(tok, "*") {
-            node = Node::new(NodeKind::MUL, node, primary(tok)?);
+            node = Node::new_binary(NodeKind::MUL, node, unary(tok)?);
             continue;
         }
         if consume(tok, "/") {
-            node = Node::new(NodeKind::DIV, node, primary(tok)?);
+            node = Node::new_binary(NodeKind::DIV, node, unary(tok)?);
             continue;
         }
         break Ok(node);
+    }
+}
+
+fn unary(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
+    if consume(tok, "+") {
+        unary(tok)
+    } else if consume(tok, "-") {
+        Ok(Node::new_unary(NodeKind::NEG, unary(tok)?))
+    } else {
+        primary(tok)
     }
 }
 
@@ -198,21 +269,39 @@ fn primary(tok: &mut &Token) -> Result<Box<Node>, ParseError> {
     if consume(tok, "(") {
         let node = expr(tok)?;
         expect(tok, ")")?;
-        Ok(node)
-    } else {
-        Ok(Node::new_num(expect_number(tok)?))
+        return Ok(node);
     }
+    if let Some(val) = consume_number(tok) {
+        return Ok(Node::new_num(val));
+    }
+    Err(ParseError {
+        loc: tok.loc,
+        msg: "expected an expression".to_owned(),
+    })
 }
 
-fn gen(node: &Node) {
+fn push() {
+    println!("  push rax");
+}
+
+fn pop(reg: &str) {
+    println!("  pop {}", reg);
+}
+
+fn gen_expr(node: &Node) {
     if node.kind == NodeKind::NUM {
-        println!("  push {}", node.val.unwrap());
+        println!("  mov rax, {}", node.val.unwrap());
         return;
     }
-    gen(node.lhs.as_ref().unwrap());
-    gen(node.rhs.as_ref().unwrap());
-    println!("  pop rdi");
-    println!("  pop rax");
+    if node.kind == NodeKind::NEG {
+        gen_expr(node.lhs.as_ref().unwrap());
+        println!("  neg rax");
+        return;
+    }
+    gen_expr(node.rhs.as_ref().unwrap());
+    push();
+    gen_expr(node.lhs.as_ref().unwrap());
+    pop("rdi");
     match node.kind {
         NodeKind::ADD => {
             println!("  add rax, rdi");
@@ -227,9 +316,30 @@ fn gen(node: &Node) {
             println!("  cqo");
             println!("  idiv rdi");
         }
-        _ => {}
+        NodeKind::EQ => {
+            println!("  cmp rax, rdi");
+            println!("  sete al");
+            println!("  movzb rax, al");
+        }
+        NodeKind::NE => {
+            println!("  cmp rax, rdi");
+            println!("  setne al");
+            println!("  movzb rax, al");
+        }
+        NodeKind::LT => {
+            println!("  cmp rax, rdi");
+            println!("  setl al");
+            println!("  movzb rax, al");
+        }
+        NodeKind::LE => {
+            println!("  cmp rax, rdi");
+            println!("  setle al");
+            println!("  movzb rax, al");
+        }
+        _ => {
+            panic!("NodeKind::{:?} is missing", node.kind);
+        }
     };
-    println!("  push rax");
 }
 
 fn main() {
@@ -259,7 +369,6 @@ fn main() {
     println!(".intel_syntax noprefix");
     println!(".globl main");
     println!("main:");
-    gen(&node);
-    println!("  pop rax");
+    gen_expr(&node);
     println!("  ret")
 }
