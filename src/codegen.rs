@@ -1,4 +1,4 @@
-use crate::parse::{Node, NodeKind};
+use crate::parse::{BinaryOperator, Node, UnaryOperator};
 
 fn push() {
     println!("  push rax");
@@ -9,55 +9,58 @@ fn pop(reg: &str) {
 }
 
 pub fn gen_expr(node: &Node) {
-    if node.kind == NodeKind::NUM {
-        println!("  mov rax, {}", node.val.unwrap());
-        return;
+    match node {
+        Node::Binary { op, lhs, rhs } => {
+            gen_expr(rhs);
+            push();
+            gen_expr(lhs);
+            pop("rdi");
+            match op {
+                BinaryOperator::ADD => {
+                    println!("  add rax, rdi");
+                }
+                BinaryOperator::SUB => {
+                    println!("  sub rax, rdi");
+                }
+                BinaryOperator::MUL => {
+                    println!("  imul rax, rdi");
+                }
+                BinaryOperator::DIV => {
+                    println!("  cqo");
+                    println!("  idiv rdi");
+                }
+                BinaryOperator::EQ => {
+                    println!("  cmp rax, rdi");
+                    println!("  sete al");
+                    println!("  movzb rax, al");
+                }
+                BinaryOperator::NE => {
+                    println!("  cmp rax, rdi");
+                    println!("  setne al");
+                    println!("  movzb rax, al");
+                }
+                BinaryOperator::LT => {
+                    println!("  cmp rax, rdi");
+                    println!("  setl al");
+                    println!("  movzb rax, al");
+                }
+                BinaryOperator::LE => {
+                    println!("  cmp rax, rdi");
+                    println!("  setle al");
+                    println!("  movzb rax, al");
+                }
+            }
+        }
+        Node::Unary { op, expr } => {
+            gen_expr(expr);
+            match op {
+                UnaryOperator::NEG => {
+                    println!("  neg rax");
+                }
+            }
+        }
+        Node::Num(val) => {
+            println!("  mov rax, {}", val);
+        }
     }
-    if node.kind == NodeKind::NEG {
-        gen_expr(node.lhs.as_ref().unwrap());
-        println!("  neg rax");
-        return;
-    }
-    gen_expr(node.rhs.as_ref().unwrap());
-    push();
-    gen_expr(node.lhs.as_ref().unwrap());
-    pop("rdi");
-    match node.kind {
-        NodeKind::ADD => {
-            println!("  add rax, rdi");
-        }
-        NodeKind::SUB => {
-            println!("  sub rax, rdi");
-        }
-        NodeKind::MUL => {
-            println!("  imul rax, rdi");
-        }
-        NodeKind::DIV => {
-            println!("  cqo");
-            println!("  idiv rdi");
-        }
-        NodeKind::EQ => {
-            println!("  cmp rax, rdi");
-            println!("  sete al");
-            println!("  movzb rax, al");
-        }
-        NodeKind::NE => {
-            println!("  cmp rax, rdi");
-            println!("  setne al");
-            println!("  movzb rax, al");
-        }
-        NodeKind::LT => {
-            println!("  cmp rax, rdi");
-            println!("  setl al");
-            println!("  movzb rax, al");
-        }
-        NodeKind::LE => {
-            println!("  cmp rax, rdi");
-            println!("  setle al");
-            println!("  movzb rax, al");
-        }
-        _ => {
-            panic!("NodeKind::{:?} is missing", node.kind);
-        }
-    };
 }
