@@ -27,6 +27,17 @@ impl Token {
     }
 }
 
+// Returns true if c is valid as the first character of an identifier.
+fn is_ident1(c: u8) -> bool {
+    (b'a' <= c && c <= b'z') || (b'A' <= c && c <= b'Z') || c == b'_'
+}
+
+// Returns true if c is valid as the non-first character of an identifier.
+fn is_ident2(c: u8) -> bool {
+    is_ident1(c) || (b'0' <= c && c <= b'9')
+}
+
+// Read a punctuator token and returns its length.
 fn read_punct(bytes: &[u8]) -> usize {
     if bytes.starts_with(b"==")
         || bytes.starts_with(b"!=")
@@ -47,7 +58,7 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
     let bytes = text.as_bytes();
     let mut pos = 0;
 
-    while pos < text.len() {
+    while pos < bytes.len() {
         // Skip whitespace characters.
         if bytes[pos].is_ascii_whitespace() {
             pos += 1;
@@ -57,7 +68,7 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
         // Numeric literal
         if bytes[pos].is_ascii_digit() {
             let loc = pos;
-            while pos < text.len() && bytes[pos].is_ascii_digit() {
+            while pos < bytes.len() && bytes[pos].is_ascii_digit() {
                 pos += 1;
             }
             let val = i32::from_str_radix(&text[loc..pos], 10).unwrap();
@@ -78,11 +89,14 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
         }
 
         // Identifier
-        if b'a' <= bytes[pos] && bytes[pos] <= b'z' {
-            let tok = Token::new(TokenKind::Ident, pos, &text[pos..pos + 1]);
+        if is_ident1(bytes[pos]) {
+            let loc = pos;
+            while pos < text.len() && is_ident2(bytes[pos]) {
+                pos += 1;
+            }
+            let tok = Token::new(TokenKind::Ident, pos, &text[loc..pos]);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
-            pos += 1;
             continue;
         }
 

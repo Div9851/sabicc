@@ -1,6 +1,6 @@
 use crate::{
     error::Error,
-    parse::{BinaryOperator, Expr, Stmt, UnaryOperator},
+    parse::{BinaryOperator, Expr, Func, Stmt, UnaryOperator},
 };
 
 fn push() {
@@ -11,7 +11,23 @@ fn pop(reg: &str) {
     println!("  pop {}", reg);
 }
 
-pub fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
+pub fn gen_func(func: &Func) -> Result<(), Error> {
+    // Prologue
+    println!("  push rbp");
+    println!("  mov rbp, rsp");
+    println!("  sub rsp, {}", func.stack_size);
+    // Body
+    for stmt in &func.body {
+        gen_stmt(stmt)?;
+    }
+    // Epilogue
+    println!("  mov rsp, rbp");
+    println!("  pop rbp");
+    println!("  ret");
+    Ok(())
+}
+
+fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
     match stmt {
         Stmt::ExprStmt(expr) => {
             gen_expr(expr)?;
@@ -20,7 +36,7 @@ pub fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
     }
 }
 
-pub fn gen_expr(expr: &Expr) -> Result<(), Error> {
+fn gen_expr(expr: &Expr) -> Result<(), Error> {
     match expr {
         Expr::Assign { lhs, rhs } => {
             gen_addr(lhs)?;
@@ -90,8 +106,8 @@ pub fn gen_expr(expr: &Expr) -> Result<(), Error> {
 }
 
 fn gen_addr(expr: &Expr) -> Result<(), Error> {
-    if let Expr::Var(offset) = expr {
-        println!("  lea rax, [rbp-{}]", offset);
+    if let Expr::Var(obj) = expr {
+        println!("  lea rax, [rbp-{}]", obj.offset);
         return Ok(());
     }
     Err(Error {
