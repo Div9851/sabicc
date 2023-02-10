@@ -17,9 +17,7 @@ pub fn gen_func(func: &Func) -> Result<(), Error> {
     println!("  mov rbp, rsp");
     println!("  sub rsp, {}", func.stack_size);
     // Body
-    for stmt in &func.body {
-        gen_stmt(stmt)?;
-    }
+    gen_stmt(&func.body)?;
     // Epilogue
     println!("  mov rsp, rbp");
     println!("  pop rbp");
@@ -38,6 +36,12 @@ fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
             println!("  mov rsp, rbp");
             println!("  pop rbp");
             println!("  ret");
+            Ok(())
+        }
+        Stmt::Block(block) => {
+            for stmt in block {
+                gen_stmt(stmt)?;
+            }
             Ok(())
         }
     }

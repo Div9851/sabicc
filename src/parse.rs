@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::Error;
-use crate::tokenize::{self, Token, TokenKind};
+use crate::tokenize::{self, Token};
 
 #[derive(Clone)]
 pub struct Obj {
@@ -32,12 +32,13 @@ impl ParseContext {
 }
 
 pub struct Func {
-    pub body: Vec<Box<Stmt>>,
+    pub body: Box<Stmt>,
     pub stack_size: usize,
 }
 
 pub enum Stmt {
     ReturnStmt(Box<Expr>),
+    Block(Vec<Box<Stmt>>),
     ExprStmt(Box<Expr>),
 }
 
@@ -92,30 +93,47 @@ impl Expr {
 }
 
 pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
-    let mut body = Vec::new();
     let mut ctx = ParseContext {
         locals: HashMap::new(),
         stack_size: 0,
     };
-    while tok.kind != TokenKind::EOF {
-        body.push(stmt(tok, &mut ctx)?);
-    }
+    let block = block_stmt(tok, &mut ctx)?;
     Ok(Box::new(Func {
-        body,
+        body: block,
         stack_size: ctx.stack_size,
     }))
 }
 
 fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
-    if tokenize::consume(tok, "return") {
-        let stmt = Box::new(Stmt::ReturnStmt(expr(tok, ctx)?));
-        tokenize::expect(tok, ";")?;
-        Ok(stmt)
+    if tokenize::equal(tok, "return") {
+        Ok(return_stmt(tok, ctx)?)
+    } else if tokenize::equal(tok, "{") {
+        Ok(block_stmt(tok, ctx)?)
     } else {
-        let stmt = Box::new(Stmt::ExprStmt(expr(tok, ctx)?));
-        tokenize::expect(tok, ";")?;
-        Ok(stmt)
+        Ok(expr_stmt(tok, ctx)?)
     }
+}
+
+fn return_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    tokenize::expect(tok, "return")?;
+    let stmt = Box::new(Stmt::ReturnStmt(expr(tok, ctx)?));
+    tokenize::expect(tok, ";")?;
+    Ok(stmt)
+}
+
+fn block_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    tokenize::expect(tok, "{")?;
+    let mut block = Vec::new();
+    while !tokenize::consume(tok, "}") {
+        block.push(stmt(tok, ctx)?);
+    }
+    Ok(Box::new(Stmt::Block(block)))
+}
+
+fn expr_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    let stmt = Box::new(Stmt::ExprStmt(expr(tok, ctx)?));
+    tokenize::expect(tok, ";")?;
+    Ok(stmt)
 }
 
 fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {

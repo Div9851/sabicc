@@ -28,6 +28,10 @@ impl Token {
     }
 }
 
+pub fn equal(tok: &mut &Token, op: &str) -> bool {
+    (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op
+}
+
 pub fn consume(tok: &mut &Token, op: &str) -> bool {
     if (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op {
         *tok = tok.next.as_ref().unwrap();
@@ -44,7 +48,7 @@ pub fn expect(tok: &mut &Token, op: &str) -> Result<(), Error> {
     } else {
         Err(Error {
             loc: tok.loc,
-            msg: format!("'{}' expected", op),
+            msg: format!("'{}' expected, got '{}'", op, tok.text),
         })
     }
 }
@@ -141,7 +145,7 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
             while pos < text.len() && is_ident2(bytes[pos]) {
                 pos += 1;
             }
-            let mut tok = Token::new(TokenKind::Ident, pos, &text[loc..pos]);
+            let mut tok = Token::new(TokenKind::Ident, loc, &text[loc..pos]);
             convert_keyword(&mut tok);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
