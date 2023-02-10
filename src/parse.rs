@@ -37,6 +37,7 @@ pub struct Func {
 }
 
 pub enum Stmt {
+    NullStmt,
     ReturnStmt(Box<Expr>),
     Block(Vec<Box<Stmt>>),
     ExprStmt(Box<Expr>),
@@ -105,7 +106,9 @@ pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
 }
 
 fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
-    if tokenize::equal(tok, "return") {
+    if tokenize::consume(tok, ";") {
+        Ok(Box::new(Stmt::NullStmt))
+    } else if tokenize::equal(tok, "return") {
         Ok(return_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "{") {
         Ok(block_stmt(tok, ctx)?)

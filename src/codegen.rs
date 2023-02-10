@@ -27,6 +27,7 @@ pub fn gen_func(func: &Func) -> Result<(), Error> {
 
 fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
     match stmt {
+        Stmt::NullStmt => Ok(()),
         Stmt::ExprStmt(expr) => {
             gen_expr(expr)?;
             Ok(())
