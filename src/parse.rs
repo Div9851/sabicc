@@ -36,7 +36,7 @@ pub struct Func {
     pub stack_size: usize,
 }
 
-pub enum Stmt {
+pub enum StmtKind {
     NullStmt,
     ReturnStmt(Box<Expr>),
     Block(Vec<Box<Stmt>>),
@@ -52,6 +52,15 @@ pub enum Stmt {
         inc: Option<Box<Expr>>,
         body: Box<Stmt>,
     },
+    WhileStmt {
+        cond: Box<Expr>,
+        body: Box<Stmt>,
+    },
+}
+
+pub struct Stmt {
+    pub kind: StmtKind,
+    pub loc: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -73,7 +82,7 @@ pub enum UnaryOperator {
     ADDR,  // &
 }
 
-pub enum Expr {
+pub enum ExprKind {
     Assign {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
@@ -91,18 +100,41 @@ pub enum Expr {
     Num(i32),
 }
 
+pub struct Expr {
+    pub kind: ExprKind,
+    pub loc: usize,
+}
+
 impl Expr {
-    fn new_binary(op: BinaryOperator, lhs: Box<Expr>, rhs: Box<Expr>) -> Box<Expr> {
-        Box::new(Expr::Binary { op, lhs, rhs })
+    fn new_assign(lhs: Box<Expr>, rhs: Box<Expr>, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::Assign { lhs, rhs },
+            loc,
+        })
     }
-    fn new_unary(op: UnaryOperator, expr: Box<Expr>) -> Box<Expr> {
-        Box::new(Expr::Unary { op, expr })
+    fn new_binary(op: BinaryOperator, lhs: Box<Expr>, rhs: Box<Expr>, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::Binary { op, lhs, rhs },
+            loc,
+        })
     }
-    fn new_var(obj: Obj) -> Box<Expr> {
-        Box::new(Expr::Var(obj))
+    fn new_unary(op: UnaryOperator, expr: Box<Expr>, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::Unary { op, expr },
+            loc,
+        })
     }
-    fn new_num(val: i32) -> Box<Expr> {
-        Box::new(Expr::Num(val))
+    fn new_var(obj: Obj, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::Var(obj),
+            loc,
+        })
+    }
+    fn new_num(val: i32, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::Num(val),
+            loc,
+        })
     }
 }
 
@@ -119,8 +151,8 @@ pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
 }
 
 fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
-    if tokenize::consume(tok, ";") {
-        Ok(Box::new(Stmt::NullStmt))
+    if tokenize::equal(tok, ";") {
+        Ok(null_stmt(tok)?)
     } else if tokenize::equal(tok, "return") {
         Ok(return_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "{") {
@@ -136,29 +168,53 @@ fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
     }
 }
 
-fn return_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
-    tokenize::expect(tok, "return")?;
-    let stmt = Box::new(Stmt::ReturnStmt(expr(tok, ctx)?));
+fn null_stmt(tok: &mut &Token) -> Result<Box<Stmt>, Error> {
+    let loc = tok.loc;
     tokenize::expect(tok, ";")?;
-    Ok(stmt)
+    let stmt = Stmt {
+        kind: StmtKind::NullStmt,
+        loc,
+    };
+    Ok(Box::new(stmt))
+}
+
+fn return_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    let loc = tok.loc;
+    tokenize::expect(tok, "return")?;
+    let stmt = Stmt {
+        kind: StmtKind::ReturnStmt(expr(tok, ctx)?),
+        loc,
+    };
+    tokenize::expect(tok, ";")?;
+    Ok(Box::new(stmt))
 }
 
 fn block_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    let loc = tok.loc;
     tokenize::expect(tok, "{")?;
     let mut block = Vec::new();
     while !tokenize::consume(tok, "}") {
         block.push(stmt(tok, ctx)?);
     }
-    Ok(Box::new(Stmt::Block(block)))
+    let stmt = Stmt {
+        kind: StmtKind::Block(block),
+        loc,
+    };
+    Ok(Box::new(stmt))
 }
 
 fn expr_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
-    let stmt = Box::new(Stmt::ExprStmt(expr(tok, ctx)?));
+    let loc = tok.loc;
+    let stmt = Stmt {
+        kind: StmtKind::ExprStmt(expr(tok, ctx)?),
+        loc,
+    };
     tokenize::expect(tok, ";")?;
-    Ok(stmt)
+    Ok(Box::new(stmt))
 }
 
 fn if_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    let loc = tok.loc;
     tokenize::expect(tok, "if")?;
     tokenize::expect(tok, "(")?;
     let cond = expr(tok, ctx)?;
@@ -168,10 +224,15 @@ fn if_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error>
     if tokenize::consume(tok, "else") {
         els = Some(stmt(tok, ctx)?);
     }
-    Ok(Box::new(Stmt::IfStmt { cond, then, els }))
+    let stmt = Stmt {
+        kind: StmtKind::IfStmt { cond, then, els },
+        loc,
+    };
+    Ok(Box::new(stmt))
 }
 
 fn for_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    let loc = tok.loc;
     tokenize::expect(tok, "for")?;
     tokenize::expect(tok, "(")?;
     let init = stmt(tok, ctx)?;
@@ -186,26 +247,30 @@ fn for_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error
     }
     tokenize::expect(tok, ")")?;
     let body = stmt(tok, ctx)?;
-    Ok(Box::new(Stmt::ForStmt {
-        init,
-        cond,
-        inc,
-        body,
-    }))
+    let stmt = Stmt {
+        kind: StmtKind::ForStmt {
+            init,
+            cond,
+            inc,
+            body,
+        },
+        loc,
+    };
+    Ok(Box::new(stmt))
 }
 
 fn while_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    let loc = tok.loc;
     tokenize::expect(tok, "while")?;
     tokenize::expect(tok, "(")?;
     let cond = expr(tok, ctx)?;
     tokenize::expect(tok, ")")?;
     let body = stmt(tok, ctx)?;
-    Ok(Box::new(Stmt::ForStmt {
-        init: Box::new(Stmt::NullStmt),
-        cond: Some(cond),
-        inc: None,
-        body,
-    }))
+    let stmt = Stmt {
+        kind: StmtKind::WhileStmt { cond, body },
+        loc,
+    };
+    Ok(Box::new(stmt))
 }
 
 // expr = assign
@@ -216,9 +281,10 @@ fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 // assign = equality ("=" assign)?
 fn assign(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let lhs = equality(tok, ctx)?;
+    let loc = tok.loc;
     if tokenize::consume(tok, "=") {
         let rhs = assign(tok, ctx)?;
-        Ok(Box::new(Expr::Assign { lhs, rhs }))
+        Ok(Expr::new_assign(lhs, rhs, loc))
     } else {
         Ok(lhs)
     }
@@ -228,12 +294,13 @@ fn assign(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> 
 fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = relational(tok, ctx)?;
     loop {
+        let loc = tok.loc;
         if tokenize::consume(tok, "==") {
-            expr = Expr::new_binary(BinaryOperator::EQ, expr, relational(tok, ctx)?);
+            expr = Expr::new_binary(BinaryOperator::EQ, expr, relational(tok, ctx)?, loc);
             continue;
         }
         if tokenize::consume(tok, "!=") {
-            expr = Expr::new_binary(BinaryOperator::NE, expr, relational(tok, ctx)?);
+            expr = Expr::new_binary(BinaryOperator::NE, expr, relational(tok, ctx)?, loc);
             continue;
         }
         break Ok(expr);
@@ -244,20 +311,21 @@ fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error
 fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = add(tok, ctx)?;
     loop {
+        let loc = tok.loc;
         if tokenize::consume(tok, "<") {
-            expr = Expr::new_binary(BinaryOperator::LT, expr, add(tok, ctx)?);
+            expr = Expr::new_binary(BinaryOperator::LT, expr, add(tok, ctx)?, loc);
             continue;
         }
         if tokenize::consume(tok, "<=") {
-            expr = Expr::new_binary(BinaryOperator::LE, expr, add(tok, ctx)?);
+            expr = Expr::new_binary(BinaryOperator::LE, expr, add(tok, ctx)?, loc);
             continue;
         }
         if tokenize::consume(tok, ">") {
-            expr = Expr::new_binary(BinaryOperator::LT, add(tok, ctx)?, expr);
+            expr = Expr::new_binary(BinaryOperator::LT, add(tok, ctx)?, expr, loc);
             continue;
         }
         if tokenize::consume(tok, ">=") {
-            expr = Expr::new_binary(BinaryOperator::LE, add(tok, ctx)?, expr);
+            expr = Expr::new_binary(BinaryOperator::LE, add(tok, ctx)?, expr, loc);
             continue;
         }
         break Ok(expr);
@@ -268,12 +336,13 @@ fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Err
 fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = mul(tok, ctx)?;
     loop {
+        let loc = tok.loc;
         if tokenize::consume(tok, "+") {
-            expr = Expr::new_binary(BinaryOperator::ADD, expr, mul(tok, ctx)?);
+            expr = Expr::new_binary(BinaryOperator::ADD, expr, mul(tok, ctx)?, loc);
             continue;
         }
         if tokenize::consume(tok, "-") {
-            expr = Expr::new_binary(BinaryOperator::SUB, expr, mul(tok, ctx)?);
+            expr = Expr::new_binary(BinaryOperator::SUB, expr, mul(tok, ctx)?, loc);
             continue;
         }
         break Ok(expr);
@@ -284,12 +353,13 @@ fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = unary(tok, ctx)?;
     loop {
+        let loc = tok.loc;
         if tokenize::consume(tok, "*") {
-            expr = Expr::new_binary(BinaryOperator::MUL, expr, unary(tok, ctx)?);
+            expr = Expr::new_binary(BinaryOperator::MUL, expr, unary(tok, ctx)?, loc);
             continue;
         }
         if tokenize::consume(tok, "/") {
-            expr = Expr::new_binary(BinaryOperator::DIV, expr, unary(tok, ctx)?);
+            expr = Expr::new_binary(BinaryOperator::DIV, expr, unary(tok, ctx)?, loc);
             continue;
         }
         break Ok(expr);
@@ -299,14 +369,15 @@ fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 // unary = ("+" | "-" | "*" | "&") unary
 //       | primary
 fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let loc = tok.loc;
     if tokenize::consume(tok, "+") {
         unary(tok, ctx)
     } else if tokenize::consume(tok, "-") {
-        Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, ctx)?))
+        Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, ctx)?, loc))
     } else if tokenize::consume(tok, "*") {
-        Ok(Expr::new_unary(UnaryOperator::DEREF, unary(tok, ctx)?))
+        Ok(Expr::new_unary(UnaryOperator::DEREF, unary(tok, ctx)?, loc))
     } else if tokenize::consume(tok, "&") {
-        Ok(Expr::new_unary(UnaryOperator::ADDR, unary(tok, ctx)?))
+        Ok(Expr::new_unary(UnaryOperator::ADDR, unary(tok, ctx)?, loc))
     } else {
         primary(tok, ctx)
     }
@@ -314,6 +385,8 @@ fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 
 // primary = "(" expr ")" | ident | num
 fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let loc = tok.loc;
+
     if tokenize::consume(tok, "(") {
         let expr = expr(tok, ctx)?;
         tokenize::expect(tok, ")")?;
@@ -321,11 +394,11 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error>
     }
 
     if let Some(val) = tokenize::consume_number(tok) {
-        return Ok(Expr::new_num(val));
+        return Ok(Expr::new_num(val, loc));
     }
 
     if let Some(name) = tokenize::consume_ident(tok) {
-        return Ok(Expr::new_var(ctx.get_lvar(name)));
+        return Ok(Expr::new_var(ctx.get_lvar(name), loc));
     }
 
     Err(Error {

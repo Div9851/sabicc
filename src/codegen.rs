@@ -1,6 +1,6 @@
 use crate::{
     error::Error,
-    parse::{BinaryOperator, Expr, Func, Stmt, UnaryOperator},
+    parse::{BinaryOperator, Expr, ExprKind, Func, Stmt, StmtKind, UnaryOperator},
 };
 
 pub struct CodegenContext {
@@ -30,27 +30,27 @@ pub fn gen_func(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
 }
 
 fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
-    match stmt {
-        Stmt::NullStmt => Ok(()),
-        Stmt::ExprStmt(expr) => {
+    match &stmt.kind {
+        StmtKind::NullStmt => Ok(()),
+        StmtKind::ExprStmt(expr) => {
             gen_expr(expr)?;
             Ok(())
         }
-        Stmt::ReturnStmt(expr) => {
-            gen_expr(expr)?;
+        StmtKind::ReturnStmt(expr) => {
+            gen_expr(&expr)?;
             println!("  mov rsp, rbp");
             println!("  pop rbp");
             println!("  ret");
             Ok(())
         }
-        Stmt::Block(block) => {
+        StmtKind::Block(block) => {
             for stmt in block {
                 gen_stmt(stmt, ctx)?;
             }
             Ok(())
         }
-        Stmt::IfStmt { cond, then, els } => {
-            gen_expr(cond)?;
+        StmtKind::IfStmt { cond, then, els } => {
+            gen_expr(&cond)?;
             println!("  cmp rax, 0");
             println!("  je .L.else.{}", ctx.label);
             gen_stmt(then, ctx)?;
@@ -63,7 +63,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
             ctx.label += 1;
             Ok(())
         }
-        Stmt::ForStmt {
+        StmtKind::ForStmt {
             init,
             cond,
             inc,
@@ -85,22 +85,33 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
             ctx.label += 1;
             Ok(())
         }
+        StmtKind::WhileStmt { cond, body } => {
+            println!(".L.begin.{}:", ctx.label);
+            gen_expr(cond)?;
+            println!("  cmp rax, 0");
+            println!("  je .L.end.{}", ctx.label);
+            gen_stmt(body, ctx)?;
+            println!("  jmp .L.begin.{}", ctx.label);
+            println!(".L.end.{}:", ctx.label);
+            ctx.label += 1;
+            Ok(())
+        }
     }
 }
 
 fn gen_expr(expr: &Expr) -> Result<(), Error> {
-    match expr {
-        Expr::Assign { lhs, rhs } => {
-            gen_addr(lhs)?;
+    match &expr.kind {
+        ExprKind::Assign { lhs, rhs } => {
+            gen_addr(&lhs)?;
             push();
-            gen_expr(rhs)?;
+            gen_expr(&rhs)?;
             pop("rdi");
             println!("  mov [rdi], rax");
         }
-        Expr::Binary { op, lhs, rhs } => {
-            gen_expr(rhs)?;
+        ExprKind::Binary { op, lhs, rhs } => {
+            gen_expr(&rhs)?;
             push();
-            gen_expr(lhs)?;
+            gen_expr(&lhs)?;
             pop("rdi");
             match op {
                 BinaryOperator::ADD => {
@@ -138,26 +149,26 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
                 }
             };
         }
-        Expr::Unary { op, expr } => {
+        ExprKind::Unary { op, expr } => {
             match op {
                 UnaryOperator::NEG => {
-                    gen_expr(expr)?;
+                    gen_expr(&expr)?;
                     println!("  neg rax");
                 }
                 UnaryOperator::DEREF => {
-                    gen_expr(expr)?;
+                    gen_expr(&expr)?;
                     println!("  mov rax, [rax]");
                 }
                 UnaryOperator::ADDR => {
-                    gen_addr(expr)?;
+                    gen_addr(&expr)?;
                 }
             };
         }
-        Expr::Var(_) => {
+        ExprKind::Var(_) => {
             gen_addr(expr)?;
             println!("  mov rax, [rax]");
         }
-        Expr::Num(val) => {
+        ExprKind::Num(val) => {
             println!("  mov rax, {}", val);
         }
     };
@@ -165,20 +176,20 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
 }
 
 fn gen_addr(expr: &Expr) -> Result<(), Error> {
-    if let Expr::Var(obj) = expr {
+    if let ExprKind::Var(obj) = &expr.kind {
         println!("  lea rax, [rbp-{}]", obj.offset);
         return Ok(());
     }
-    if let Expr::Unary {
+    if let ExprKind::Unary {
         op: UnaryOperator::DEREF,
         expr,
-    } = expr
+    } = &expr.kind
     {
         gen_expr(expr)?;
         return Ok(());
     }
     Err(Error {
-        loc: 0,
+        loc: expr.loc,
         msg: "not an lvalue".to_owned(),
     })
 }
