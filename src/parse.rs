@@ -1,11 +1,134 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::error::Error;
 use crate::tokenize::{self, Token};
 
+pub enum Type {
+    Int,
+    Ptr(Rc<Type>),
+}
+
+impl Type {
+    fn new_int() -> Rc<Type> {
+        Rc::new(Type::Int)
+    }
+    fn new_ptr(base_ty: &Rc<Type>) -> Rc<Type> {
+        Rc::new(Type::Ptr(Rc::clone(base_ty)))
+    }
+    pub fn is_int(&self) -> bool {
+        match self {
+            Type::Int => true,
+            _ => false,
+        }
+    }
+    pub fn is_ptr(&self) -> bool {
+        match self {
+            Type::Ptr(_) => true,
+            _ => false,
+        }
+    }
+    pub fn get_base_ty(&self) -> Rc<Type> {
+        match self {
+            Type::Ptr(base_ty) => Rc::clone(base_ty),
+            _ => panic!("try to get base_ty of a non pointer type"),
+        }
+    }
+}
+
+fn type_of_binary_expr(
+    op: BinaryOperator,
+    lhs: &Rc<Type>,
+    rhs: &Rc<Type>,
+    loc: usize,
+) -> Result<Rc<Type>, Error> {
+    match op {
+        BinaryOperator::ADD => type_of_add_expr(lhs, rhs, loc),
+        BinaryOperator::SUB => type_of_sub_expr(lhs, rhs, loc),
+        BinaryOperator::MUL | BinaryOperator::DIV => {
+            if lhs.is_int() && rhs.is_int() {
+                Ok(Type::new_int())
+            } else {
+                Err(Error {
+                    loc,
+                    msg: "invalid operands".to_owned(),
+                })
+            }
+        }
+        BinaryOperator::EQ | BinaryOperator::NE | BinaryOperator::LT | BinaryOperator::LE => {
+            Ok(Type::new_int())
+        }
+    }
+}
+
+fn type_of_add_expr(lhs: &Rc<Type>, rhs: &Rc<Type>, loc: usize) -> Result<Rc<Type>, Error> {
+    if lhs.is_int() && rhs.is_int() {
+        // `int + int`
+        Ok(Type::new_int())
+    } else if lhs.is_ptr() && rhs.is_int() {
+        // `ptr + int`
+        Ok(Rc::clone(lhs))
+    } else if lhs.is_int() && rhs.is_ptr() {
+        // `int + ptr`
+        Ok(Rc::clone(rhs))
+    } else {
+        // `ptr + ptr`
+        Err(Error {
+            loc,
+            msg: "invalid operands".to_owned(),
+        })
+    }
+}
+
+fn type_of_sub_expr(lhs: &Rc<Type>, rhs: &Rc<Type>, loc: usize) -> Result<Rc<Type>, Error> {
+    if lhs.is_int() && rhs.is_int() {
+        // `int - int`
+        Ok(Type::new_int())
+    } else if lhs.is_ptr() && rhs.is_int() {
+        // `ptr - int`
+        Ok(Rc::clone(lhs))
+    } else if lhs.is_int() && rhs.is_ptr() {
+        // `int - ptr`
+        Err(Error {
+            loc,
+            msg: "invalid operands".to_owned(),
+        })
+    } else {
+        // `ptr - ptr`
+        Ok(Type::new_int())
+    }
+}
+
+fn type_of_unary_expr(op: UnaryOperator, ty: &Rc<Type>, loc: usize) -> Result<Rc<Type>, Error> {
+    match op {
+        UnaryOperator::NEG => {
+            if ty.is_int() {
+                Ok(Type::new_int())
+            } else {
+                Err(Error {
+                    loc,
+                    msg: "invalid operand".to_owned(),
+                })
+            }
+        }
+        UnaryOperator::DEREF => {
+            if ty.is_ptr() {
+                Ok(ty.get_base_ty())
+            } else {
+                Err(Error {
+                    loc,
+                    msg: "invalid operand".to_owned(),
+                })
+            }
+        }
+        UnaryOperator::ADDR => Ok(Type::new_ptr(ty)),
+    }
+}
+
 #[derive(Clone)]
 pub struct Obj {
     pub offset: usize, // Offset from RBP
+    pub ty: Rc<Type>,  // Type
 }
 
 pub struct ParseContext {
@@ -18,6 +141,7 @@ impl ParseContext {
         self.stack_size += 8;
         let obj = Obj {
             offset: self.stack_size,
+            ty: Type::new_int(),
         };
         self.locals.insert(name, obj.clone());
         obj
@@ -102,37 +226,52 @@ pub enum ExprKind {
 
 pub struct Expr {
     pub kind: ExprKind,
+    pub ty: Rc<Type>,
     pub loc: usize,
 }
 
 impl Expr {
     fn new_assign(lhs: Box<Expr>, rhs: Box<Expr>, loc: usize) -> Box<Expr> {
+        let result_ty = Rc::clone(&lhs.ty);
         Box::new(Expr {
             kind: ExprKind::Assign { lhs, rhs },
+            ty: result_ty,
             loc,
         })
     }
-    fn new_binary(op: BinaryOperator, lhs: Box<Expr>, rhs: Box<Expr>, loc: usize) -> Box<Expr> {
-        Box::new(Expr {
+    fn new_binary(
+        op: BinaryOperator,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        loc: usize,
+    ) -> Result<Box<Expr>, Error> {
+        let result_ty = type_of_binary_expr(op, &lhs.ty, &rhs.ty, loc)?;
+        Ok(Box::new(Expr {
             kind: ExprKind::Binary { op, lhs, rhs },
+            ty: result_ty,
             loc,
-        })
+        }))
     }
-    fn new_unary(op: UnaryOperator, expr: Box<Expr>, loc: usize) -> Box<Expr> {
-        Box::new(Expr {
+    fn new_unary(op: UnaryOperator, expr: Box<Expr>, loc: usize) -> Result<Box<Expr>, Error> {
+        let result_ty = type_of_unary_expr(op, &expr.ty, loc)?;
+        Ok(Box::new(Expr {
             kind: ExprKind::Unary { op, expr },
+            ty: result_ty,
             loc,
-        })
+        }))
     }
     fn new_var(obj: Obj, loc: usize) -> Box<Expr> {
+        let ty = Rc::clone(&obj.ty);
         Box::new(Expr {
             kind: ExprKind::Var(obj),
+            ty,
             loc,
         })
     }
     fn new_num(val: i32, loc: usize) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::Num(val),
+            ty: Type::new_int(),
             loc,
         })
     }
@@ -296,11 +435,11 @@ fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "==") {
-            expr = Expr::new_binary(BinaryOperator::EQ, expr, relational(tok, ctx)?, loc);
+            expr = Expr::new_binary(BinaryOperator::EQ, expr, relational(tok, ctx)?, loc)?;
             continue;
         }
         if tokenize::consume(tok, "!=") {
-            expr = Expr::new_binary(BinaryOperator::NE, expr, relational(tok, ctx)?, loc);
+            expr = Expr::new_binary(BinaryOperator::NE, expr, relational(tok, ctx)?, loc)?;
             continue;
         }
         break Ok(expr);
@@ -313,19 +452,19 @@ fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Err
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "<") {
-            expr = Expr::new_binary(BinaryOperator::LT, expr, add(tok, ctx)?, loc);
+            expr = Expr::new_binary(BinaryOperator::LT, expr, add(tok, ctx)?, loc)?;
             continue;
         }
         if tokenize::consume(tok, "<=") {
-            expr = Expr::new_binary(BinaryOperator::LE, expr, add(tok, ctx)?, loc);
+            expr = Expr::new_binary(BinaryOperator::LE, expr, add(tok, ctx)?, loc)?;
             continue;
         }
         if tokenize::consume(tok, ">") {
-            expr = Expr::new_binary(BinaryOperator::LT, add(tok, ctx)?, expr, loc);
+            expr = Expr::new_binary(BinaryOperator::LT, add(tok, ctx)?, expr, loc)?;
             continue;
         }
         if tokenize::consume(tok, ">=") {
-            expr = Expr::new_binary(BinaryOperator::LE, add(tok, ctx)?, expr, loc);
+            expr = Expr::new_binary(BinaryOperator::LE, add(tok, ctx)?, expr, loc)?;
             continue;
         }
         break Ok(expr);
@@ -338,11 +477,26 @@ fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "+") {
-            expr = Expr::new_binary(BinaryOperator::ADD, expr, mul(tok, ctx)?, loc);
+            let mut rhs = mul(tok, ctx)?;
+            if expr.ty.is_int() && rhs.ty.is_ptr() {
+                expr = Expr::new_binary(BinaryOperator::MUL, expr, Expr::new_num(8, loc), loc)?;
+            }
+            if expr.ty.is_ptr() && rhs.ty.is_int() {
+                rhs = Expr::new_binary(BinaryOperator::MUL, rhs, Expr::new_num(8, loc), loc)?;
+            }
+            expr = Expr::new_binary(BinaryOperator::ADD, expr, rhs, loc)?;
             continue;
         }
         if tokenize::consume(tok, "-") {
-            expr = Expr::new_binary(BinaryOperator::SUB, expr, mul(tok, ctx)?, loc);
+            let mut rhs = mul(tok, ctx)?;
+            if expr.ty.is_ptr() && rhs.ty.is_int() {
+                rhs = Expr::new_binary(BinaryOperator::MUL, rhs, Expr::new_num(8, loc), loc)?;
+            }
+            let ptr_diff = expr.ty.is_ptr() && rhs.ty.is_ptr();
+            expr = Expr::new_binary(BinaryOperator::SUB, expr, rhs, loc)?;
+            if ptr_diff {
+                expr = Expr::new_binary(BinaryOperator::DIV, expr, Expr::new_num(8, loc), loc)?;
+            }
             continue;
         }
         break Ok(expr);
@@ -355,11 +509,11 @@ fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "*") {
-            expr = Expr::new_binary(BinaryOperator::MUL, expr, unary(tok, ctx)?, loc);
+            expr = Expr::new_binary(BinaryOperator::MUL, expr, unary(tok, ctx)?, loc)?;
             continue;
         }
         if tokenize::consume(tok, "/") {
-            expr = Expr::new_binary(BinaryOperator::DIV, expr, unary(tok, ctx)?, loc);
+            expr = Expr::new_binary(BinaryOperator::DIV, expr, unary(tok, ctx)?, loc)?;
             continue;
         }
         break Ok(expr);
@@ -373,11 +527,11 @@ fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     if tokenize::consume(tok, "+") {
         unary(tok, ctx)
     } else if tokenize::consume(tok, "-") {
-        Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, ctx)?, loc))
+        Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, ctx)?, loc))?
     } else if tokenize::consume(tok, "*") {
-        Ok(Expr::new_unary(UnaryOperator::DEREF, unary(tok, ctx)?, loc))
+        Ok(Expr::new_unary(UnaryOperator::DEREF, unary(tok, ctx)?, loc))?
     } else if tokenize::consume(tok, "&") {
-        Ok(Expr::new_unary(UnaryOperator::ADDR, unary(tok, ctx)?, loc))
+        Ok(Expr::new_unary(UnaryOperator::ADDR, unary(tok, ctx)?, loc))?
     } else {
         primary(tok, ctx)
     }
