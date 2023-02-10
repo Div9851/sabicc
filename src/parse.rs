@@ -8,14 +8,19 @@ pub struct Obj {
     pub offset: usize, // Offset from RBP
 }
 
-pub struct Func {
-    pub body: Vec<Box<Stmt>>,
+pub struct ParseContext {
     pub locals: HashMap<String, Obj>,
     pub stack_size: usize,
 }
 
-impl Func {
-    fn new_lvar(&mut self, name: String) -> Obj {
+impl ParseContext {
+    pub fn new() -> Self {
+        Self {
+            locals: HashMap::new(),
+            stack_size: 0,
+        }
+    }
+    pub fn new_lvar(&mut self, name: String) -> Obj {
         self.stack_size += 8;
         let obj = Obj {
             offset: self.stack_size,
@@ -23,13 +28,18 @@ impl Func {
         self.locals.insert(name, obj.clone());
         obj
     }
-    fn get_lvar(&mut self, name: &str) -> Obj {
+    pub fn get_lvar(&mut self, name: &str) -> Obj {
         if let Some(obj) = self.locals.get(name) {
             obj.clone()
         } else {
             self.new_lvar(name.to_owned())
         }
     }
+}
+
+pub struct Func {
+    pub body: Vec<Box<Stmt>>,
+    pub stack_size: usize,
 }
 
 pub enum Stmt {
@@ -127,120 +137,119 @@ fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a str> {
 }
 
 pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
-    let mut f = Func {
-        body: Vec::new(),
-        locals: HashMap::new(),
-        stack_size: 0,
-    };
+    let mut body = Vec::new();
+    let mut ctx = ParseContext::new();
     while tok.kind != TokenKind::EOF {
-        let stmt = stmt(tok, &mut f)?;
-        f.body.push(stmt);
+        body.push(stmt(tok, &mut ctx)?);
     }
-    Ok(Box::new(f))
+    Ok(Box::new(Func {
+        body,
+        stack_size: ctx.stack_size,
+    }))
 }
 
-fn stmt(tok: &mut &Token, f: &mut Func) -> Result<Box<Stmt>, Error> {
-    let stmt = Box::new(Stmt::ExprStmt(expr(tok, f)?));
+fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    let stmt = Box::new(Stmt::ExprStmt(expr(tok, ctx)?));
     expect(tok, ";")?;
     Ok(stmt)
 }
 
-fn expr(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
-    assign(tok, f)
+fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    assign(tok, ctx)
 }
 
 // assign = equality ("=" assign)?
-fn assign(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
-    let lhs = equality(tok, f)?;
+fn assign(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let lhs = equality(tok, ctx)?;
     if consume(tok, "=") {
-        let rhs = assign(tok, f)?;
+        let rhs = assign(tok, ctx)?;
         Ok(Box::new(Expr::Assign { lhs, rhs }))
     } else {
         Ok(lhs)
     }
 }
 
-fn equality(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
-    let mut expr = relational(tok, f)?;
+fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let mut expr = relational(tok, ctx)?;
     loop {
         if consume(tok, "==") {
-            expr = Expr::new_binary(BinaryOperator::EQ, expr, relational(tok, f)?);
+            expr = Expr::new_binary(BinaryOperator::EQ, expr, relational(tok, ctx)?);
             continue;
         }
         if consume(tok, "!=") {
-            expr = Expr::new_binary(BinaryOperator::NE, expr, relational(tok, f)?);
+            expr = Expr::new_binary(BinaryOperator::NE, expr, relational(tok, ctx)?);
             continue;
         }
         break Ok(expr);
     }
 }
 
-fn relational(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
-    let mut expr = add(tok, f)?;
+fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let mut expr = add(tok, ctx)?;
     loop {
         if consume(tok, "<") {
-            expr = Expr::new_binary(BinaryOperator::LT, expr, add(tok, f)?);
+            expr = Expr::new_binary(BinaryOperator::LT, expr, add(tok, ctx)?);
             continue;
         }
         if consume(tok, "<=") {
-            expr = Expr::new_binary(BinaryOperator::LE, expr, add(tok, f)?);
+            expr = Expr::new_binary(BinaryOperator::LE, expr, add(tok, ctx)?);
             continue;
         }
         if consume(tok, ">") {
-            expr = Expr::new_binary(BinaryOperator::LT, add(tok, f)?, expr);
+            expr = Expr::new_binary(BinaryOperator::LT, add(tok, ctx)?, expr);
             continue;
         }
         if consume(tok, ">=") {
-            expr = Expr::new_binary(BinaryOperator::LE, add(tok, f)?, expr);
+            expr = Expr::new_binary(BinaryOperator::LE, add(tok, ctx)?, expr);
             continue;
         }
         break Ok(expr);
     }
 }
 
-fn add(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
-    let mut expr = mul(tok, f)?;
+fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let mut expr = mul(tok, ctx)?;
     loop {
         if consume(tok, "+") {
-            expr = Expr::new_binary(BinaryOperator::ADD, expr, mul(tok, f)?);
+            expr = Expr::new_binary(BinaryOperator::ADD, expr, mul(tok, ctx)?);
             continue;
         }
         if consume(tok, "-") {
-            expr = Expr::new_binary(BinaryOperator::SUB, expr, mul(tok, f)?);
+            expr = Expr::new_binary(BinaryOperator::SUB, expr, mul(tok, ctx)?);
             continue;
         }
         break Ok(expr);
     }
 }
 
-fn mul(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
-    let mut expr = unary(tok, f)?;
+fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let mut expr = unary(tok, ctx)?;
     loop {
         if consume(tok, "*") {
-            expr = Expr::new_binary(BinaryOperator::MUL, expr, unary(tok, f)?);
+            expr = Expr::new_binary(BinaryOperator::MUL, expr, unary(tok, ctx)?);
             continue;
         }
         if consume(tok, "/") {
-            expr = Expr::new_binary(BinaryOperator::DIV, expr, unary(tok, f)?);
+            expr = Expr::new_binary(BinaryOperator::DIV, expr, unary(tok, ctx)?);
             continue;
         }
         break Ok(expr);
     }
 }
 
-fn unary(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
+fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     if consume(tok, "+") {
-        unary(tok, f)
+        unary(tok, ctx)
     } else if consume(tok, "-") {
-        Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, f)?))
+        Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, ctx)?))
     } else {
-        primary(tok, f)
+        primary(tok, ctx)
     }
 }
 
-fn primary(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
+fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     if consume(tok, "(") {
-        let expr = expr(tok, f)?;
+        let expr = expr(tok, ctx)?;
         expect(tok, ")")?;
         return Ok(expr);
     }
@@ -250,7 +259,7 @@ fn primary(tok: &mut &Token, f: &mut Func) -> Result<Box<Expr>, Error> {
     }
 
     if let Some(name) = consume_ident(tok) {
-        return Ok(Expr::new_var(f.get_lvar(name)));
+        return Ok(Expr::new_var(ctx.get_lvar(name)));
     }
 
     Err(Error {
