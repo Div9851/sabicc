@@ -1,4 +1,4 @@
-use sabicc::codegen;
+use sabicc::codegen::{self, CodegenContext};
 use sabicc::error::Error;
 use sabicc::parse;
 use sabicc::tokenize;
@@ -34,7 +34,8 @@ fn main() {
     println!(".intel_syntax noprefix");
     println!(".globl main");
     println!("main:");
-    if let Err(err) = codegen::gen_func(&f) {
+    let mut ctx = CodegenContext { label: 0 };
+    if let Err(err) = codegen::gen_func(&f, &mut ctx) {
         handle_error(text, err);
     }
 }

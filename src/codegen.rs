@@ -3,6 +3,10 @@ use crate::{
     parse::{BinaryOperator, Expr, Func, Stmt, UnaryOperator},
 };
 
+pub struct CodegenContext {
+    pub label: usize,
+}
+
 fn push() {
     println!("  push rax");
 }
@@ -11,13 +15,13 @@ fn pop(reg: &str) {
     println!("  pop {}", reg);
 }
 
-pub fn gen_func(func: &Func) -> Result<(), Error> {
+pub fn gen_func(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
     // Prologue
     println!("  push rbp");
     println!("  mov rbp, rsp");
     println!("  sub rsp, {}", func.stack_size);
     // Body
-    gen_stmt(&func.body)?;
+    gen_stmt(&func.body, ctx)?;
     // Epilogue
     println!("  mov rsp, rbp");
     println!("  pop rbp");
@@ -25,7 +29,7 @@ pub fn gen_func(func: &Func) -> Result<(), Error> {
     Ok(())
 }
 
-fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
+fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
     match stmt {
         Stmt::NullStmt => Ok(()),
         Stmt::ExprStmt(expr) => {
@@ -41,8 +45,22 @@ fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
         }
         Stmt::Block(block) => {
             for stmt in block {
-                gen_stmt(stmt)?;
+                gen_stmt(stmt, ctx)?;
             }
+            Ok(())
+        }
+        Stmt::IfStmt { cond, then, els } => {
+            gen_expr(cond)?;
+            println!("  cmp rax, 0");
+            println!("  je .L.else.{}", ctx.label);
+            gen_stmt(then, ctx)?;
+            println!("  jmp .L.end.{}", ctx.label);
+            println!(".L.else.{}:", ctx.label);
+            if let Some(els) = els {
+                gen_stmt(els, ctx)?;
+            }
+            println!(".L.end.{}:", ctx.label);
+            ctx.label += 1;
             Ok(())
         }
     }

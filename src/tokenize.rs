@@ -98,7 +98,7 @@ fn read_punct(bytes: &[u8]) -> usize {
 }
 
 fn convert_keyword(tok: &mut Token) {
-    if tok.text == "return" {
+    if tok.text == "return" || tok.text == "if" || tok.text == "else" {
         tok.kind = TokenKind::Keyword;
     }
 }

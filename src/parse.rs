@@ -41,6 +41,11 @@ pub enum Stmt {
     ReturnStmt(Box<Expr>),
     Block(Vec<Box<Stmt>>),
     ExprStmt(Box<Expr>),
+    IfStmt {
+        cond: Box<Expr>,
+        then: Box<Stmt>,
+        els: Option<Box<Stmt>>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -112,6 +117,8 @@ fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
         Ok(return_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "{") {
         Ok(block_stmt(tok, ctx)?)
+    } else if tokenize::equal(tok, "if") {
+        Ok(if_stmt(tok, ctx)?)
     } else {
         Ok(expr_stmt(tok, ctx)?)
     }
@@ -137,6 +144,19 @@ fn expr_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Erro
     let stmt = Box::new(Stmt::ExprStmt(expr(tok, ctx)?));
     tokenize::expect(tok, ";")?;
     Ok(stmt)
+}
+
+fn if_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    tokenize::expect(tok, "if")?;
+    tokenize::expect(tok, "(")?;
+    let cond = expr(tok, ctx)?;
+    tokenize::expect(tok, ")")?;
+    let then = stmt(tok, ctx)?;
+    let mut els = None;
+    if tokenize::consume(tok, "else") {
+        els = Some(stmt(tok, ctx)?);
+    }
+    Ok(Box::new(Stmt::IfStmt { cond, then, els }))
 }
 
 fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
