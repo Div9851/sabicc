@@ -33,6 +33,13 @@ fn gen_stmt(stmt: &Stmt) -> Result<(), Error> {
             gen_expr(expr)?;
             Ok(())
         }
+        Stmt::ReturnStmt(expr) => {
+            gen_expr(expr)?;
+            println!("  mov rsp, rbp");
+            println!("  pop rbp");
+            println!("  ret");
+            Ok(())
+        }
     }
 }
 

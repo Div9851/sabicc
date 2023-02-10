@@ -4,6 +4,7 @@ use crate::error::Error;
 pub enum TokenKind {
     Ident,    // Identifiers
     Punct,    // Punctuators
+    Keyword,  // Keywords
     Num(i32), // Numeric literals
     EOF,      // End-of-file markers
 }
@@ -28,7 +29,7 @@ impl Token {
 }
 
 pub fn consume(tok: &mut &Token, op: &str) -> bool {
-    if tok.kind == TokenKind::Punct && tok.text == op {
+    if (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op {
         *tok = tok.next.as_ref().unwrap();
         true
     } else {
@@ -37,7 +38,7 @@ pub fn consume(tok: &mut &Token, op: &str) -> bool {
 }
 
 pub fn expect(tok: &mut &Token, op: &str) -> Result<(), Error> {
-    if tok.kind == TokenKind::Punct && tok.text == op {
+    if (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op {
         *tok = tok.next.as_ref().unwrap();
         Ok(())
     } else {
@@ -92,6 +93,12 @@ fn read_punct(bytes: &[u8]) -> usize {
     }
 }
 
+fn convert_keyword(tok: &mut Token) {
+    if tok.text == "return" {
+        tok.kind = TokenKind::Keyword;
+    }
+}
+
 pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
     let mut head = Token::new(TokenKind::Punct, 0, "");
     let mut cur = head.as_mut();
@@ -128,13 +135,14 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
             continue;
         }
 
-        // Identifier
+        // Identifier or keyword
         if is_ident1(bytes[pos]) {
             let loc = pos;
             while pos < text.len() && is_ident2(bytes[pos]) {
                 pos += 1;
             }
-            let tok = Token::new(TokenKind::Ident, pos, &text[loc..pos]);
+            let mut tok = Token::new(TokenKind::Ident, pos, &text[loc..pos]);
+            convert_keyword(&mut tok);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
             continue;

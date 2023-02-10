@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::Error;
-use crate::tokenize;
-use crate::tokenize::{Token, TokenKind};
+use crate::tokenize::{self, Token, TokenKind};
 
 #[derive(Clone)]
 pub struct Obj {
@@ -38,6 +37,7 @@ pub struct Func {
 }
 
 pub enum Stmt {
+    ReturnStmt(Box<Expr>),
     ExprStmt(Box<Expr>),
 }
 
@@ -107,9 +107,15 @@ pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
 }
 
 fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
-    let stmt = Box::new(Stmt::ExprStmt(expr(tok, ctx)?));
-    tokenize::expect(tok, ";")?;
-    Ok(stmt)
+    if tokenize::consume(tok, "return") {
+        let stmt = Box::new(Stmt::ReturnStmt(expr(tok, ctx)?));
+        tokenize::expect(tok, ";")?;
+        Ok(stmt)
+    } else {
+        let stmt = Box::new(Stmt::ExprStmt(expr(tok, ctx)?));
+        tokenize::expect(tok, ";")?;
+        Ok(stmt)
+    }
 }
 
 fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
