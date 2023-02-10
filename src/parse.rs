@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::Error;
+use crate::tokenize;
 use crate::tokenize::{Token, TokenKind};
 
 #[derive(Clone)]
@@ -14,12 +15,6 @@ pub struct ParseContext {
 }
 
 impl ParseContext {
-    pub fn new() -> Self {
-        Self {
-            locals: HashMap::new(),
-            stack_size: 0,
-        }
-    }
     pub fn new_lvar(&mut self, name: String) -> Obj {
         self.stack_size += 8;
         let obj = Obj {
@@ -96,49 +91,12 @@ impl Expr {
     }
 }
 
-fn consume(tok: &mut &Token, op: &str) -> bool {
-    if tok.kind == TokenKind::Punct && tok.text == op {
-        *tok = tok.next.as_ref().unwrap();
-        true
-    } else {
-        false
-    }
-}
-
-fn expect(tok: &mut &Token, op: &str) -> Result<(), Error> {
-    if tok.kind == TokenKind::Punct && tok.text == op {
-        *tok = tok.next.as_ref().unwrap();
-        Ok(())
-    } else {
-        Err(Error {
-            loc: tok.loc,
-            msg: format!("'{}' expected", op),
-        })
-    }
-}
-
-fn consume_number(tok: &mut &Token) -> Option<i32> {
-    if let TokenKind::Num(val) = tok.kind {
-        *tok = tok.next.as_ref().unwrap();
-        Some(val)
-    } else {
-        None
-    }
-}
-
-fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a str> {
-    if tok.kind == TokenKind::Ident {
-        let name = &tok.text;
-        *tok = tok.next.as_ref().unwrap();
-        Some(name)
-    } else {
-        None
-    }
-}
-
 pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
     let mut body = Vec::new();
-    let mut ctx = ParseContext::new();
+    let mut ctx = ParseContext {
+        locals: HashMap::new(),
+        stack_size: 0,
+    };
     while tok.kind != TokenKind::EOF {
         body.push(stmt(tok, &mut ctx)?);
     }
@@ -150,7 +108,7 @@ pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
 
 fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
     let stmt = Box::new(Stmt::ExprStmt(expr(tok, ctx)?));
-    expect(tok, ";")?;
+    tokenize::expect(tok, ";")?;
     Ok(stmt)
 }
 
@@ -161,7 +119,7 @@ fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 // assign = equality ("=" assign)?
 fn assign(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let lhs = equality(tok, ctx)?;
-    if consume(tok, "=") {
+    if tokenize::consume(tok, "=") {
         let rhs = assign(tok, ctx)?;
         Ok(Box::new(Expr::Assign { lhs, rhs }))
     } else {
@@ -172,11 +130,11 @@ fn assign(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> 
 fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = relational(tok, ctx)?;
     loop {
-        if consume(tok, "==") {
+        if tokenize::consume(tok, "==") {
             expr = Expr::new_binary(BinaryOperator::EQ, expr, relational(tok, ctx)?);
             continue;
         }
-        if consume(tok, "!=") {
+        if tokenize::consume(tok, "!=") {
             expr = Expr::new_binary(BinaryOperator::NE, expr, relational(tok, ctx)?);
             continue;
         }
@@ -187,19 +145,19 @@ fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error
 fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = add(tok, ctx)?;
     loop {
-        if consume(tok, "<") {
+        if tokenize::consume(tok, "<") {
             expr = Expr::new_binary(BinaryOperator::LT, expr, add(tok, ctx)?);
             continue;
         }
-        if consume(tok, "<=") {
+        if tokenize::consume(tok, "<=") {
             expr = Expr::new_binary(BinaryOperator::LE, expr, add(tok, ctx)?);
             continue;
         }
-        if consume(tok, ">") {
+        if tokenize::consume(tok, ">") {
             expr = Expr::new_binary(BinaryOperator::LT, add(tok, ctx)?, expr);
             continue;
         }
-        if consume(tok, ">=") {
+        if tokenize::consume(tok, ">=") {
             expr = Expr::new_binary(BinaryOperator::LE, add(tok, ctx)?, expr);
             continue;
         }
@@ -210,11 +168,11 @@ fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Err
 fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = mul(tok, ctx)?;
     loop {
-        if consume(tok, "+") {
+        if tokenize::consume(tok, "+") {
             expr = Expr::new_binary(BinaryOperator::ADD, expr, mul(tok, ctx)?);
             continue;
         }
-        if consume(tok, "-") {
+        if tokenize::consume(tok, "-") {
             expr = Expr::new_binary(BinaryOperator::SUB, expr, mul(tok, ctx)?);
             continue;
         }
@@ -225,11 +183,11 @@ fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = unary(tok, ctx)?;
     loop {
-        if consume(tok, "*") {
+        if tokenize::consume(tok, "*") {
             expr = Expr::new_binary(BinaryOperator::MUL, expr, unary(tok, ctx)?);
             continue;
         }
-        if consume(tok, "/") {
+        if tokenize::consume(tok, "/") {
             expr = Expr::new_binary(BinaryOperator::DIV, expr, unary(tok, ctx)?);
             continue;
         }
@@ -238,9 +196,9 @@ fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 }
 
 fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
-    if consume(tok, "+") {
+    if tokenize::consume(tok, "+") {
         unary(tok, ctx)
-    } else if consume(tok, "-") {
+    } else if tokenize::consume(tok, "-") {
         Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, ctx)?))
     } else {
         primary(tok, ctx)
@@ -248,17 +206,17 @@ fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 }
 
 fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
-    if consume(tok, "(") {
+    if tokenize::consume(tok, "(") {
         let expr = expr(tok, ctx)?;
-        expect(tok, ")")?;
+        tokenize::expect(tok, ")")?;
         return Ok(expr);
     }
 
-    if let Some(val) = consume_number(tok) {
+    if let Some(val) = tokenize::consume_number(tok) {
         return Ok(Expr::new_num(val));
     }
 
-    if let Some(name) = consume_ident(tok) {
+    if let Some(name) = tokenize::consume_ident(tok) {
         return Ok(Expr::new_var(ctx.get_lvar(name)));
     }
 

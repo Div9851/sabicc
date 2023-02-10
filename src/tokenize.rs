@@ -27,6 +27,46 @@ impl Token {
     }
 }
 
+pub fn consume(tok: &mut &Token, op: &str) -> bool {
+    if tok.kind == TokenKind::Punct && tok.text == op {
+        *tok = tok.next.as_ref().unwrap();
+        true
+    } else {
+        false
+    }
+}
+
+pub fn expect(tok: &mut &Token, op: &str) -> Result<(), Error> {
+    if tok.kind == TokenKind::Punct && tok.text == op {
+        *tok = tok.next.as_ref().unwrap();
+        Ok(())
+    } else {
+        Err(Error {
+            loc: tok.loc,
+            msg: format!("'{}' expected", op),
+        })
+    }
+}
+
+pub fn consume_number(tok: &mut &Token) -> Option<i32> {
+    if let TokenKind::Num(val) = tok.kind {
+        *tok = tok.next.as_ref().unwrap();
+        Some(val)
+    } else {
+        None
+    }
+}
+
+pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a str> {
+    if tok.kind == TokenKind::Ident {
+        let name = &tok.text;
+        *tok = tok.next.as_ref().unwrap();
+        Some(name)
+    } else {
+        None
+    }
+}
+
 // Returns true if c is valid as the first character of an identifier.
 fn is_ident1(c: u8) -> bool {
     (b'a' <= c && c <= b'z') || (b'A' <= c && c <= b'Z') || c == b'_'
