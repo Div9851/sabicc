@@ -127,6 +127,8 @@ fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
         Ok(if_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "for") {
         Ok(for_stmt(tok, ctx)?)
+    } else if tokenize::equal(tok, "while") {
+        Ok(while_stmt(tok, ctx)?)
     } else {
         Ok(expr_stmt(tok, ctx)?)
     }
@@ -186,6 +188,20 @@ fn for_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error
         init,
         cond,
         inc,
+        body,
+    }))
+}
+
+fn while_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    tokenize::expect(tok, "while")?;
+    tokenize::expect(tok, "(")?;
+    let cond = expr(tok, ctx)?;
+    tokenize::expect(tok, ")")?;
+    let body = stmt(tok, ctx)?;
+    Ok(Box::new(Stmt::ForStmt {
+        init: Box::new(Stmt::NullStmt),
+        cond: Some(cond),
+        inc: None,
         body,
     }))
 }

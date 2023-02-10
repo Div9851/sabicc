@@ -73,9 +73,9 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
             println!(".L.begin.{}:", ctx.label);
             if let Some(cond) = cond {
                 gen_expr(cond)?;
+                println!("  cmp rax, 0");
+                println!("  je .L.end.{}", ctx.label);
             }
-            println!("  cmp rax, 0");
-            println!("  je .L.end.{}", ctx.label);
             gen_stmt(body, ctx)?;
             if let Some(inc) = inc {
                 gen_expr(inc)?;
