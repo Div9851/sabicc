@@ -139,10 +139,17 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
             };
         }
         Expr::Unary { op, expr } => {
-            gen_expr(expr)?;
             match op {
                 UnaryOperator::NEG => {
+                    gen_expr(expr)?;
                     println!("  neg rax");
+                }
+                UnaryOperator::DEREF => {
+                    gen_expr(expr)?;
+                    println!("  mov rax, [rax]");
+                }
+                UnaryOperator::ADDR => {
+                    gen_addr(expr)?;
                 }
             };
         }
@@ -160,6 +167,14 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
 fn gen_addr(expr: &Expr) -> Result<(), Error> {
     if let Expr::Var(obj) = expr {
         println!("  lea rax, [rbp-{}]", obj.offset);
+        return Ok(());
+    }
+    if let Expr::Unary {
+        op: UnaryOperator::DEREF,
+        expr,
+    } = expr
+    {
+        gen_expr(expr)?;
         return Ok(());
     }
     Err(Error {

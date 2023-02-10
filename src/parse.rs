@@ -68,7 +68,9 @@ pub enum BinaryOperator {
 
 #[derive(Clone, Copy)]
 pub enum UnaryOperator {
-    NEG, // -
+    NEG,   // -
+    DEREF, // *
+    ADDR,  // &
 }
 
 pub enum Expr {
@@ -206,6 +208,7 @@ fn while_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Err
     }))
 }
 
+// expr = assign
 fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     assign(tok, ctx)
 }
@@ -221,6 +224,7 @@ fn assign(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> 
     }
 }
 
+// equality = relational ("==" relational | "!=" relational)*
 fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = relational(tok, ctx)?;
     loop {
@@ -236,6 +240,7 @@ fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error
     }
 }
 
+// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
 fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = add(tok, ctx)?;
     loop {
@@ -259,6 +264,7 @@ fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Err
     }
 }
 
+// add = mul ("+" mul | "-" mul)*
 fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = mul(tok, ctx)?;
     loop {
@@ -274,6 +280,7 @@ fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     }
 }
 
+// mul = unary ("*" unary | "/" unary)*
 fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let mut expr = unary(tok, ctx)?;
     loop {
@@ -289,16 +296,23 @@ fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     }
 }
 
+// unary = ("+" | "-" | "*" | "&") unary
+//       | primary
 fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     if tokenize::consume(tok, "+") {
         unary(tok, ctx)
     } else if tokenize::consume(tok, "-") {
         Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, ctx)?))
+    } else if tokenize::consume(tok, "*") {
+        Ok(Expr::new_unary(UnaryOperator::DEREF, unary(tok, ctx)?))
+    } else if tokenize::consume(tok, "&") {
+        Ok(Expr::new_unary(UnaryOperator::ADDR, unary(tok, ctx)?))
     } else {
         primary(tok, ctx)
     }
 }
 
+// primary = "(" expr ")" | ident | num
 fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     if tokenize::consume(tok, "(") {
         let expr = expr(tok, ctx)?;
