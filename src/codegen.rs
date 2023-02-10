@@ -63,6 +63,28 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
             ctx.label += 1;
             Ok(())
         }
+        Stmt::ForStmt {
+            init,
+            cond,
+            inc,
+            body,
+        } => {
+            gen_stmt(init, ctx)?;
+            println!(".L.begin.{}:", ctx.label);
+            if let Some(cond) = cond {
+                gen_expr(cond)?;
+            }
+            println!("  cmp rax, 0");
+            println!("  je .L.end.{}", ctx.label);
+            gen_stmt(body, ctx)?;
+            if let Some(inc) = inc {
+                gen_expr(inc)?;
+            }
+            println!("  jmp .L.begin.{}", ctx.label);
+            println!(".L.end.{}:", ctx.label);
+            ctx.label += 1;
+            Ok(())
+        }
     }
 }
 

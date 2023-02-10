@@ -46,6 +46,12 @@ pub enum Stmt {
         then: Box<Stmt>,
         els: Option<Box<Stmt>>,
     },
+    ForStmt {
+        init: Box<Stmt>,
+        cond: Option<Box<Expr>>,
+        inc: Option<Box<Expr>>,
+        body: Box<Stmt>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +125,8 @@ fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
         Ok(block_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "if") {
         Ok(if_stmt(tok, ctx)?)
+    } else if tokenize::equal(tok, "for") {
+        Ok(for_stmt(tok, ctx)?)
     } else {
         Ok(expr_stmt(tok, ctx)?)
     }
@@ -157,6 +165,29 @@ fn if_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error>
         els = Some(stmt(tok, ctx)?);
     }
     Ok(Box::new(Stmt::IfStmt { cond, then, els }))
+}
+
+fn for_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    tokenize::expect(tok, "for")?;
+    tokenize::expect(tok, "(")?;
+    let init = stmt(tok, ctx)?;
+    let mut cond = None;
+    if !tokenize::equal(tok, ";") {
+        cond = Some(expr(tok, ctx)?);
+    }
+    tokenize::expect(tok, ";")?;
+    let mut inc = None;
+    if !tokenize::equal(tok, ")") {
+        inc = Some(expr(tok, ctx)?);
+    }
+    tokenize::expect(tok, ")")?;
+    let body = stmt(tok, ctx)?;
+    Ok(Box::new(Stmt::ForStmt {
+        init,
+        cond,
+        inc,
+        body,
+    }))
 }
 
 fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
