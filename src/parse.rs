@@ -4,34 +4,58 @@ use std::rc::Rc;
 use crate::error::Error;
 use crate::tokenize::{self, Token, TokenKind};
 
-pub enum Type {
+pub enum TypeKind {
     Int,
     Ptr(Rc<Type>),
 }
 
+pub struct Type {
+    kind: TypeKind,
+    size: usize,
+}
+
 impl Type {
     fn new_int() -> Rc<Type> {
-        Rc::new(Type::Int)
+        Rc::new(Type {
+            kind: TypeKind::Int,
+            size: 8,
+        })
     }
     fn new_ptr(base_ty: &Rc<Type>) -> Rc<Type> {
-        Rc::new(Type::Ptr(Rc::clone(base_ty)))
+        Rc::new(Type {
+            kind: TypeKind::Ptr(Rc::clone(base_ty)),
+            size: 8,
+        })
     }
     pub fn is_int(&self) -> bool {
-        match self {
-            Type::Int => true,
+        match self.kind {
+            TypeKind::Int => true,
             _ => false,
         }
     }
     pub fn is_ptr(&self) -> bool {
-        match self {
-            Type::Ptr(_) => true,
+        match self.kind {
+            TypeKind::Ptr(_) => true,
             _ => false,
         }
     }
-    pub fn get_base_ty(&self) -> Rc<Type> {
-        match self {
-            Type::Ptr(base_ty) => Rc::clone(base_ty),
+    pub fn get_base_ty(&self) -> &Rc<Type> {
+        match &self.kind {
+            TypeKind::Ptr(base_ty) => base_ty,
             _ => panic!("try to get base_ty of a non pointer type"),
+        }
+    }
+    pub fn equal(a: &Self, b: &Self) -> bool {
+        if a.is_int() {
+            b.is_int()
+        } else {
+            let a_base_ty = a.get_base_ty();
+            if b.is_ptr() {
+                let b_base_ty = b.get_base_ty();
+                Type::equal(a_base_ty, b_base_ty)
+            } else {
+                false
+            }
         }
     }
 }
@@ -95,7 +119,14 @@ fn type_of_sub_expr(lhs: &Rc<Type>, rhs: &Rc<Type>, loc: usize) -> Result<Rc<Typ
         })
     } else {
         // `ptr - ptr`
-        Ok(Type::new_int())
+        if Type::equal(lhs, rhs) {
+            Ok(Type::new_int())
+        } else {
+            Err(Error {
+                loc,
+                msg: "invalid operands".to_owned(),
+            })
+        }
     }
 }
 
@@ -113,7 +144,7 @@ fn type_of_unary_expr(op: UnaryOperator, ty: &Rc<Type>, loc: usize) -> Result<Rc
         }
         UnaryOperator::DEREF => {
             if ty.is_ptr() {
-                Ok(ty.get_base_ty())
+                Ok(Rc::clone(ty.get_base_ty()))
             } else {
                 Err(Error {
                     loc,
@@ -138,7 +169,7 @@ pub struct ParseContext {
 
 impl ParseContext {
     pub fn new_lvar(&mut self, decl: Decl) -> Obj {
-        self.stack_size += 8;
+        self.stack_size += decl.ty.size;
         let obj = Obj {
             offset: self.stack_size,
             ty: decl.ty,
@@ -563,23 +594,46 @@ fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
         if tokenize::consume(tok, "+") {
             let mut rhs = mul(tok, ctx)?;
             if expr.ty.is_int() && rhs.ty.is_ptr() {
-                expr = Expr::new_binary(BinaryOperator::MUL, expr, Expr::new_num(8, loc), loc)?;
+                let base_ty = rhs.ty.get_base_ty();
+                expr = Expr::new_binary(
+                    BinaryOperator::MUL,
+                    expr,
+                    Expr::new_num(base_ty.size as i32, loc),
+                    loc,
+                )?;
             }
             if expr.ty.is_ptr() && rhs.ty.is_int() {
-                rhs = Expr::new_binary(BinaryOperator::MUL, rhs, Expr::new_num(8, loc), loc)?;
+                let base_ty = expr.ty.get_base_ty();
+                rhs = Expr::new_binary(
+                    BinaryOperator::MUL,
+                    rhs,
+                    Expr::new_num(base_ty.size as i32, loc),
+                    loc,
+                )?;
             }
             expr = Expr::new_binary(BinaryOperator::ADD, expr, rhs, loc)?;
             continue;
         }
         if tokenize::consume(tok, "-") {
+            let ty = Rc::clone(&expr.ty);
             let mut rhs = mul(tok, ctx)?;
             if expr.ty.is_ptr() && rhs.ty.is_int() {
-                rhs = Expr::new_binary(BinaryOperator::MUL, rhs, Expr::new_num(8, loc), loc)?;
+                rhs = Expr::new_binary(
+                    BinaryOperator::MUL,
+                    rhs,
+                    Expr::new_num(ty.get_base_ty().size as i32, loc),
+                    loc,
+                )?;
             }
             let ptr_diff = expr.ty.is_ptr() && rhs.ty.is_ptr();
             expr = Expr::new_binary(BinaryOperator::SUB, expr, rhs, loc)?;
             if ptr_diff {
-                expr = Expr::new_binary(BinaryOperator::DIV, expr, Expr::new_num(8, loc), loc)?;
+                expr = Expr::new_binary(
+                    BinaryOperator::DIV,
+                    expr,
+                    Expr::new_num(ty.get_base_ty().size as i32, loc),
+                    loc,
+                )?;
             }
             continue;
         }
