@@ -105,4 +105,6 @@ assert 3 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *x; }'
 assert 4 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *(x+1); }'
 assert 5 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *(x+2); }'
 
+assert 2 'int main() { return func(1,2,3,4,5,6); } int func(int a, int b, int c, int d, int e, int f) { return b; }'
+
 echo OK
