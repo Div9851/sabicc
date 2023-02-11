@@ -146,7 +146,7 @@ impl ParseContext {
         self.locals.insert(decl.name, obj.clone());
         obj
     }
-    pub fn get_lvar(&mut self, name: &str) -> Option<Obj> {
+    pub fn find_lvar(&mut self, name: &str) -> Option<Obj> {
         if let Some(obj) = self.locals.get(name) {
             Some(obj.clone())
         } else {
@@ -228,6 +228,7 @@ pub enum ExprKind {
     },
     Var(Obj),
     Num(i32),
+    FunCall(String),
 }
 
 pub struct Expr {
@@ -277,6 +278,13 @@ impl Expr {
     fn new_num(val: i32, loc: usize) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::Num(val),
+            ty: Type::new_int(),
+            loc,
+        })
+    }
+    fn new_funcall(name: &str, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::FunCall(name.to_owned()),
             ty: Type::new_int(),
             loc,
         })
@@ -608,7 +616,8 @@ fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     }
 }
 
-// primary = "(" expr ")" | ident | num
+// primary = "(" expr ")" | ident args? | num
+// args = "(" ")"
 fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let loc = tok.loc;
 
@@ -623,7 +632,13 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error>
     }
 
     if let Some(name) = tokenize::consume_ident(tok) {
-        if let Some(obj) = ctx.get_lvar(name) {
+        // Function call
+        if tokenize::consume(tok, "(") {
+            tokenize::expect(tok, ")")?;
+            return Ok(Expr::new_funcall(name, loc));
+        }
+        // Variable
+        if let Some(obj) = ctx.find_lvar(name) {
             return Ok(Expr::new_var(obj, loc));
         } else {
             return Err(Error {

@@ -1,12 +1,14 @@
 #!/bin/bash
 executable=./target/debug/sabicc
 
+gcc -c -o tmp2.o helper.c
+
 assert() {
     expected="$1"
     input="$2"
 
     $executable "$input" > tmp.s || exit
-    gcc -o tmp tmp.s
+    gcc -o tmp tmp.s tmp2.o
     ./tmp
     actual="$?"
 
@@ -83,5 +85,8 @@ assert 5 '{ int x=3; int *y=&x; *y=5; return x; }'
 assert 7 '{ int x=3; int y=5; *(&x-1)=7; return y; }'
 assert 7 '{ int x=3; int y=5; *(&y+2-1)=7; return x; }'
 assert 5 '{ int x=3; return (&x+2)-&x+3; }'
+
+assert 3 '{ return ret3(); }'
+assert 5 '{ return ret5(); }'
 
 echo OK

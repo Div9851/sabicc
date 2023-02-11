@@ -3,6 +3,12 @@ use crate::{
     parse::{BinaryOperator, Expr, ExprKind, Func, Stmt, StmtKind, UnaryOperator},
 };
 
+// Round up `n` to the nearest multiple of `align`. For instance,
+// align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
+fn align_to(n: usize, align: usize) -> usize {
+    (n + align - 1) / align * align
+}
+
 pub struct CodegenContext {
     pub label: usize,
 }
@@ -15,13 +21,14 @@ fn pop(reg: &str) {
     println!("  pop {}", reg);
 }
 
-pub fn gen_func(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
+pub fn gen_func(func: &Func) -> Result<(), Error> {
+    let mut ctx = CodegenContext { label: 0 };
     // Prologue
     println!("  push rbp");
     println!("  mov rbp, rsp");
-    println!("  sub rsp, {}", func.stack_size);
+    println!("  sub rsp, {}", align_to(func.stack_size, 16));
     // Body
-    gen_stmt(&func.body, ctx)?;
+    gen_stmt(&func.body, &mut ctx)?;
     // Epilogue
     println!("  mov rsp, rbp");
     println!("  pop rbp");
@@ -105,6 +112,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
     }
 }
 
+// Generate code for a given node.
 fn gen_expr(expr: &Expr) -> Result<(), Error> {
     match &expr.kind {
         ExprKind::Assign { lhs, rhs } => {
@@ -177,10 +185,23 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
         ExprKind::Num(val) => {
             println!("  mov rax, {}", val);
         }
+        ExprKind::FunCall(name) => {
+            // RSP must be align to 16
+            // it looks like not elegant way...
+            println!("  mov rbx, rsp");
+            println!("  mov rax, 8");
+            println!("  not rax");
+            println!("  and rsp, rax");
+            println!("  mov rax, 0");
+            println!("  call {}", name);
+            println!("  mov rsp, rbx");
+        }
     };
     Ok(())
 }
 
+// Compute the absolute address to a given node.
+// It's an error if a given node does not reside in memory.
 fn gen_addr(expr: &Expr) -> Result<(), Error> {
     if let ExprKind::Var(obj) = &expr.kind {
         println!("  lea rax, [rbp-{}]", obj.offset);
