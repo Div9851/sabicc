@@ -1,6 +1,6 @@
 use crate::{
     error::Error,
-    parse::{BinaryOperator, Expr, ExprKind, Func, Stmt, StmtKind, Type, TypeKind, UnaryOperator},
+    parse::{BinaryOp, Expr, ExprKind, Func, Stmt, StmtKind, Type, TypeKind, UnaryOp},
 };
 
 static ARGREG: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -31,7 +31,7 @@ fn gen_addr(expr: &Expr) -> Result<(), Error> {
         return Ok(());
     }
     if let ExprKind::Unary {
-        op: UnaryOperator::DEREF,
+        op: UnaryOp::DEREF,
         expr,
     } = &expr.kind
     {
@@ -171,35 +171,35 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
             gen_expr(&lhs)?;
             pop("rdi");
             match op {
-                BinaryOperator::ADD => {
+                BinaryOp::ADD => {
                     println!("  add rax, rdi");
                 }
-                BinaryOperator::SUB => {
+                BinaryOp::SUB => {
                     println!("  sub rax, rdi");
                 }
-                BinaryOperator::MUL => {
+                BinaryOp::MUL => {
                     println!("  imul rax, rdi");
                 }
-                BinaryOperator::DIV => {
+                BinaryOp::DIV => {
                     println!("  cqo");
                     println!("  idiv rdi");
                 }
-                BinaryOperator::EQ => {
+                BinaryOp::EQ => {
                     println!("  cmp rax, rdi");
                     println!("  sete al");
                     println!("  movzb rax, al");
                 }
-                BinaryOperator::NE => {
+                BinaryOp::NE => {
                     println!("  cmp rax, rdi");
                     println!("  setne al");
                     println!("  movzb rax, al");
                 }
-                BinaryOperator::LT => {
+                BinaryOp::LT => {
                     println!("  cmp rax, rdi");
                     println!("  setl al");
                     println!("  movzb rax, al");
                 }
-                BinaryOperator::LE => {
+                BinaryOp::LE => {
                     println!("  cmp rax, rdi");
                     println!("  setle al");
                     println!("  movzb rax, al");
@@ -208,15 +208,15 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
         }
         ExprKind::Unary { op, expr: operand } => {
             match op {
-                UnaryOperator::NEG => {
+                UnaryOp::NEG => {
                     gen_expr(&operand)?;
                     println!("  neg rax");
                 }
-                UnaryOperator::DEREF => {
+                UnaryOp::DEREF => {
                     gen_expr(&operand)?;
                     load(&expr.ty);
                 }
-                UnaryOperator::ADDR => {
+                UnaryOp::ADDR => {
                     gen_addr(&operand)?;
                 }
             };

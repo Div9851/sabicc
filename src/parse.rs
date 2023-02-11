@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::mem;
 use std::rc::Rc;
 
 use crate::error::Error;
@@ -80,104 +81,6 @@ impl Type {
     }
 }
 
-fn type_of_binary_expr(
-    op: BinaryOperator,
-    lhs: &Rc<Type>,
-    rhs: &Rc<Type>,
-    loc: usize,
-) -> Result<Rc<Type>, Error> {
-    match op {
-        BinaryOperator::ADD => type_of_add_expr(lhs, rhs, loc),
-        BinaryOperator::SUB => type_of_sub_expr(lhs, rhs, loc),
-        BinaryOperator::MUL | BinaryOperator::DIV => {
-            if lhs.is_int() && rhs.is_int() {
-                Ok(Type::new_int())
-            } else {
-                Err(Error {
-                    loc,
-                    msg: "invalid operands".to_owned(),
-                })
-            }
-        }
-        BinaryOperator::EQ | BinaryOperator::NE | BinaryOperator::LT | BinaryOperator::LE => {
-            Ok(Type::new_int())
-        }
-    }
-}
-
-fn type_of_add_expr(lhs: &Rc<Type>, rhs: &Rc<Type>, loc: usize) -> Result<Rc<Type>, Error> {
-    if lhs.is_int() && rhs.is_int() {
-        // `int + int`
-        Ok(Type::new_int())
-    } else if lhs.is_ptr() && rhs.is_int() {
-        // `ptr + int`
-        let base_ty = lhs.get_base_ty();
-        Ok(Type::new_ptr(base_ty))
-    } else if lhs.is_int() && rhs.is_ptr() {
-        // `int + ptr`
-        let base_ty = rhs.get_base_ty();
-        Ok(Type::new_ptr(base_ty))
-    } else {
-        // `ptr + ptr`
-        Err(Error {
-            loc,
-            msg: "invalid operands".to_owned(),
-        })
-    }
-}
-
-fn type_of_sub_expr(lhs: &Rc<Type>, rhs: &Rc<Type>, loc: usize) -> Result<Rc<Type>, Error> {
-    if lhs.is_int() && rhs.is_int() {
-        // `int - int`
-        Ok(Type::new_int())
-    } else if lhs.is_ptr() && rhs.is_int() {
-        // `ptr - int`
-        Ok(Rc::clone(lhs))
-    } else if lhs.is_int() && rhs.is_ptr() {
-        // `int - ptr`
-        Err(Error {
-            loc,
-            msg: "invalid operands".to_owned(),
-        })
-    } else {
-        // `ptr - ptr`
-        if Type::equal(lhs, rhs) {
-            Ok(Type::new_int())
-        } else {
-            Err(Error {
-                loc,
-                msg: "invalid operands".to_owned(),
-            })
-        }
-    }
-}
-
-fn type_of_unary_expr(op: UnaryOperator, ty: &Rc<Type>, loc: usize) -> Result<Rc<Type>, Error> {
-    match op {
-        UnaryOperator::NEG => {
-            if ty.is_int() {
-                Ok(Type::new_int())
-            } else {
-                Err(Error {
-                    loc,
-                    msg: "invalid operand".to_owned(),
-                })
-            }
-        }
-        UnaryOperator::DEREF => {
-            if ty.is_ptr() {
-                Ok(Rc::clone(ty.get_base_ty()))
-            } else {
-                Err(Error {
-                    loc,
-                    msg: "invalid operand".to_owned(),
-                })
-            }
-        }
-        UnaryOperator::ADDR => Ok(Type::new_ptr(ty)),
-    }
-}
-
 #[derive(Clone)]
 pub struct Obj {
     pub offset: usize, // Offset from RBP
@@ -251,7 +154,7 @@ pub struct Stmt {
 }
 
 #[derive(Clone, Copy)]
-pub enum BinaryOperator {
+pub enum BinaryOp {
     ADD, // +
     SUB, // -
     MUL, // *
@@ -263,7 +166,7 @@ pub enum BinaryOperator {
 }
 
 #[derive(Clone, Copy)]
-pub enum UnaryOperator {
+pub enum UnaryOp {
     NEG,   // -
     DEREF, // *
     ADDR,  // &
@@ -275,12 +178,12 @@ pub enum ExprKind {
         rhs: Box<Expr>,
     },
     Binary {
-        op: BinaryOperator,
+        op: BinaryOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
     Unary {
-        op: UnaryOperator,
+        op: UnaryOp,
         expr: Box<Expr>,
     },
     Var(Obj),
@@ -307,20 +210,149 @@ impl Expr {
         })
     }
     fn new_binary(
-        op: BinaryOperator,
+        op: BinaryOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
         loc: usize,
     ) -> Result<Box<Expr>, Error> {
-        let result_ty = type_of_binary_expr(op, &lhs.ty, &rhs.ty, loc)?;
+        match op {
+            BinaryOp::ADD => Expr::new_add(lhs, rhs, loc),
+            BinaryOp::SUB => Expr::new_sub(lhs, rhs, loc),
+            BinaryOp::MUL | BinaryOp::DIV => {
+                if lhs.ty.is_int() && rhs.ty.is_int() {
+                    let expr = Expr {
+                        kind: ExprKind::Binary { op, lhs, rhs },
+                        ty: Type::new_int(),
+                        loc,
+                    };
+                    Ok(Box::new(expr))
+                } else {
+                    Err(Error {
+                        loc,
+                        msg: "invalid operands".to_owned(),
+                    })
+                }
+            }
+            BinaryOp::EQ | BinaryOp::NE | BinaryOp::LT | BinaryOp::LE => {
+                let expr = Expr {
+                    kind: ExprKind::Binary { op, lhs, rhs },
+                    ty: Type::new_int(),
+                    loc,
+                };
+                Ok(Box::new(expr))
+            }
+        }
+    }
+
+    fn new_add(mut lhs: Box<Expr>, mut rhs: Box<Expr>, loc: usize) -> Result<Box<Expr>, Error> {
+        if lhs.ty.is_int() && rhs.ty.is_ptr() {
+            mem::swap(&mut lhs, &mut rhs);
+        }
+        let result_ty;
+        if lhs.ty.is_int() && rhs.ty.is_int() {
+            // `int + int`
+            result_ty = Type::new_int();
+        } else if lhs.ty.is_ptr() && rhs.ty.is_int() {
+            // `ptr + int`
+            rhs = Expr::new_binary(
+                BinaryOp::MUL,
+                rhs,
+                Expr::new_num(lhs.ty.get_base_ty().size as i32, loc),
+                loc,
+            )?;
+            result_ty = Rc::clone(&lhs.ty);
+        } else {
+            // `ptr + ptr`
+            return Err(Error {
+                loc,
+                msg: "invalid operands".to_owned(),
+            });
+        }
         Ok(Box::new(Expr {
-            kind: ExprKind::Binary { op, lhs, rhs },
+            kind: ExprKind::Binary {
+                op: BinaryOp::ADD,
+                lhs,
+                rhs,
+            },
             ty: result_ty,
             loc,
         }))
     }
-    fn new_unary(op: UnaryOperator, expr: Box<Expr>, loc: usize) -> Result<Box<Expr>, Error> {
-        let result_ty = type_of_unary_expr(op, &expr.ty, loc)?;
+
+    fn new_sub(lhs: Box<Expr>, mut rhs: Box<Expr>, loc: usize) -> Result<Box<Expr>, Error> {
+        let result_ty;
+        let mut div = 1;
+        if lhs.ty.is_int() && rhs.ty.is_int() {
+            // `int - int`
+            result_ty = Type::new_int();
+        } else if lhs.ty.is_ptr() && rhs.ty.is_int() {
+            // `ptr - int`
+            rhs = Expr::new_binary(
+                BinaryOp::MUL,
+                rhs,
+                Expr::new_num(lhs.ty.get_base_ty().size as i32, loc),
+                loc,
+            )?;
+            result_ty = Rc::clone(&lhs.ty);
+        } else if lhs.ty.is_int() && rhs.ty.is_ptr() {
+            // `int - ptr`
+            return Err(Error {
+                loc,
+                msg: "invalid operands".to_owned(),
+            });
+        } else {
+            // `ptr - ptr`
+            if !Type::equal(&lhs.ty, &rhs.ty) {
+                return Err(Error {
+                    loc,
+                    msg: "invalid operands".to_owned(),
+                });
+            }
+            div = lhs.ty.size as i32;
+            result_ty = Type::new_int();
+        }
+        let mut expr = Box::new(Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::SUB,
+                lhs,
+                rhs,
+            },
+            ty: result_ty,
+            loc,
+        });
+        if div > 1 {
+            expr = Expr::new_binary(BinaryOp::DIV, expr, Expr::new_num(div, loc), loc)?;
+        }
+        Ok(expr)
+    }
+
+    fn new_unary(op: UnaryOp, expr: Box<Expr>, loc: usize) -> Result<Box<Expr>, Error> {
+        let result_ty;
+        match op {
+            UnaryOp::NEG => {
+                if expr.ty.is_int() {
+                    result_ty = Type::new_int();
+                } else {
+                    return Err(Error {
+                        loc,
+                        msg: "invalid operand".to_owned(),
+                    });
+                }
+            }
+            UnaryOp::DEREF => {
+                if expr.ty.is_ptr() {
+                    result_ty = Rc::clone(expr.ty.get_base_ty());
+                } else {
+                    return Err(Error {
+                        loc,
+                        msg: "invalid operand".to_owned(),
+                    });
+                }
+            }
+            UnaryOp::ADDR => {
+                result_ty = Type::new_ptr(&expr.ty);
+            }
+        }
         Ok(Box::new(Expr {
             kind: ExprKind::Unary { op, expr },
             ty: result_ty,
@@ -632,11 +664,11 @@ fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "==") {
-            expr = Expr::new_binary(BinaryOperator::EQ, expr, relational(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::EQ, expr, relational(tok, ctx)?, loc)?;
             continue;
         }
         if tokenize::consume(tok, "!=") {
-            expr = Expr::new_binary(BinaryOperator::NE, expr, relational(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::NE, expr, relational(tok, ctx)?, loc)?;
             continue;
         }
         break Ok(expr);
@@ -649,19 +681,19 @@ fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Err
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "<") {
-            expr = Expr::new_binary(BinaryOperator::LT, expr, add(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::LT, expr, add(tok, ctx)?, loc)?;
             continue;
         }
         if tokenize::consume(tok, "<=") {
-            expr = Expr::new_binary(BinaryOperator::LE, expr, add(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::LE, expr, add(tok, ctx)?, loc)?;
             continue;
         }
         if tokenize::consume(tok, ">") {
-            expr = Expr::new_binary(BinaryOperator::LT, add(tok, ctx)?, expr, loc)?;
+            expr = Expr::new_binary(BinaryOp::LT, add(tok, ctx)?, expr, loc)?;
             continue;
         }
         if tokenize::consume(tok, ">=") {
-            expr = Expr::new_binary(BinaryOperator::LE, add(tok, ctx)?, expr, loc)?;
+            expr = Expr::new_binary(BinaryOp::LE, add(tok, ctx)?, expr, loc)?;
             continue;
         }
         break Ok(expr);
@@ -674,49 +706,13 @@ fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "+") {
-            let mut rhs = mul(tok, ctx)?;
-            if expr.ty.is_int() && rhs.ty.is_ptr() {
-                let base_ty = rhs.ty.get_base_ty();
-                expr = Expr::new_binary(
-                    BinaryOperator::MUL,
-                    expr,
-                    Expr::new_num(base_ty.size as i32, loc),
-                    loc,
-                )?;
-            }
-            if expr.ty.is_ptr() && rhs.ty.is_int() {
-                let base_ty = expr.ty.get_base_ty();
-                rhs = Expr::new_binary(
-                    BinaryOperator::MUL,
-                    rhs,
-                    Expr::new_num(base_ty.size as i32, loc),
-                    loc,
-                )?;
-            }
-            expr = Expr::new_binary(BinaryOperator::ADD, expr, rhs, loc)?;
+            let rhs = mul(tok, ctx)?;
+            expr = Expr::new_binary(BinaryOp::ADD, expr, rhs, loc)?;
             continue;
         }
         if tokenize::consume(tok, "-") {
-            let ty = Rc::clone(&expr.ty);
-            let mut rhs = mul(tok, ctx)?;
-            if expr.ty.is_ptr() && rhs.ty.is_int() {
-                rhs = Expr::new_binary(
-                    BinaryOperator::MUL,
-                    rhs,
-                    Expr::new_num(ty.get_base_ty().size as i32, loc),
-                    loc,
-                )?;
-            }
-            let ptr_diff = expr.ty.is_ptr() && rhs.ty.is_ptr();
-            expr = Expr::new_binary(BinaryOperator::SUB, expr, rhs, loc)?;
-            if ptr_diff {
-                expr = Expr::new_binary(
-                    BinaryOperator::DIV,
-                    expr,
-                    Expr::new_num(ty.get_base_ty().size as i32, loc),
-                    loc,
-                )?;
-            }
+            let rhs = mul(tok, ctx)?;
+            expr = Expr::new_binary(BinaryOp::SUB, expr, rhs, loc)?;
             continue;
         }
         break Ok(expr);
@@ -729,11 +725,11 @@ fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "*") {
-            expr = Expr::new_binary(BinaryOperator::MUL, expr, unary(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::MUL, expr, unary(tok, ctx)?, loc)?;
             continue;
         }
         if tokenize::consume(tok, "/") {
-            expr = Expr::new_binary(BinaryOperator::DIV, expr, unary(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::DIV, expr, unary(tok, ctx)?, loc)?;
             continue;
         }
         break Ok(expr);
@@ -741,20 +737,37 @@ fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
 }
 
 // unary = ("+" | "-" | "*" | "&") unary
-//       | primary
+//       | postfix
 fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let loc = tok.loc;
     if tokenize::consume(tok, "+") {
         unary(tok, ctx)
     } else if tokenize::consume(tok, "-") {
-        Ok(Expr::new_unary(UnaryOperator::NEG, unary(tok, ctx)?, loc))?
+        Ok(Expr::new_unary(UnaryOp::NEG, unary(tok, ctx)?, loc))?
     } else if tokenize::consume(tok, "*") {
-        Ok(Expr::new_unary(UnaryOperator::DEREF, unary(tok, ctx)?, loc))?
+        Ok(Expr::new_unary(UnaryOp::DEREF, unary(tok, ctx)?, loc))?
     } else if tokenize::consume(tok, "&") {
-        Ok(Expr::new_unary(UnaryOperator::ADDR, unary(tok, ctx)?, loc))?
+        Ok(Expr::new_unary(UnaryOp::ADDR, unary(tok, ctx)?, loc))?
     } else {
-        primary(tok, ctx)
+        postfix(tok, ctx)
     }
+}
+
+// postfix = primary ("[" expr "]")*
+fn postfix(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let mut ret = primary(tok, ctx)?;
+    while tokenize::equal(tok, "[") {
+        let loc = tok.loc;
+        tokenize::expect(tok, "[")?;
+        let index = expr(tok, ctx)?;
+        tokenize::expect(tok, "]")?;
+        ret = Expr::new_unary(
+            UnaryOp::DEREF,
+            Expr::new_binary(BinaryOp::ADD, ret, index, loc)?,
+            loc,
+        )?;
+    }
+    Ok(ret)
 }
 
 // funcall = ident "(" (expr ("," expr)*)? ")"
