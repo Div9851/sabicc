@@ -1,7 +1,9 @@
 use crate::{
     error::Error,
-    parse::{BinaryOperator, Expr, ExprKind, Func, Stmt, StmtKind, UnaryOperator},
+    parse::{BinaryOperator, Expr, ExprKind, Func, Stmt, StmtKind, Type, TypeKind, UnaryOperator},
 };
+
+static ARGREG: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
 // Round up `n` to the nearest multiple of `align`. For instance,
 // align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
@@ -21,14 +23,55 @@ fn pop(reg: &str) {
     println!("  pop {}", reg);
 }
 
-pub fn gen_func(func: &Func) -> Result<(), Error> {
-    let mut ctx = CodegenContext { label: 0 };
+// Compute the absolute address to a given node.
+// It's an error if a given node does not reside in memory.
+fn gen_addr(expr: &Expr) -> Result<(), Error> {
+    if let ExprKind::Var(obj) = &expr.kind {
+        println!("  lea rax, [rbp-{}]", obj.offset);
+        return Ok(());
+    }
+    if let ExprKind::Unary {
+        op: UnaryOperator::DEREF,
+        expr,
+    } = &expr.kind
+    {
+        gen_expr(expr)?;
+        return Ok(());
+    }
+    Err(Error {
+        loc: expr.loc,
+        msg: "not an lvalue".to_owned(),
+    })
+}
+
+fn load(ty: &Type) {
+    // If it is an array, do not attempt to load a value to the
+    // register because in general we can't load an entire array to a
+    // register. As a result, the result of an evaluation of an array
+    // becomes not the array itself but the address of the array.
+    // This is where "array is automatically converted to a pointer to
+    // the first element of the array in C" occurs.
+    if let TypeKind::Array(_, _) = ty.kind {
+        return;
+    }
+    println!("  mov rax, [rax]");
+}
+
+pub fn gen_func(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
+    println!(".globl {}", func.name);
+    println!("{}:", func.name);
     // Prologue
     println!("  push rbp");
     println!("  mov rbp, rsp");
     println!("  sub rsp, {}", align_to(func.stack_size, 16));
+    let mut nargs = 0;
+    for obj in &func.params {
+        println!("  lea rax, [rbp-{}]", obj.offset);
+        println!("  mov [rax], {}", ARGREG[nargs]);
+        nargs += 1;
+    }
     // Body
-    gen_stmt(&func.body, &mut ctx)?;
+    gen_stmt(&func.body, ctx)?;
     // Epilogue
     println!("  mov rsp, rbp");
     println!("  pop rbp");
@@ -180,7 +223,7 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
         }
         ExprKind::Var(_) => {
             gen_addr(expr)?;
-            println!("  mov rax, [rax]");
+            load(&expr.ty);
         }
         ExprKind::Num(val) => {
             println!("  mov rax, {}", val);
@@ -196,37 +239,9 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
             for i in (0..nargs).rev() {
                 pop(argreg[i]);
             }
-            // RSP must be align to 16
-            // it looks like not elegant way...
-            println!("  mov rbx, rsp");
-            println!("  mov rax, 8");
-            println!("  not rax");
-            println!("  and rsp, rax");
-            println!("  mov rax, 0");
+            // todo: RSP must be align to 16
             println!("  call {}", name);
-            println!("  mov rsp, rbx");
         }
     };
     Ok(())
-}
-
-// Compute the absolute address to a given node.
-// It's an error if a given node does not reside in memory.
-fn gen_addr(expr: &Expr) -> Result<(), Error> {
-    if let ExprKind::Var(obj) = &expr.kind {
-        println!("  lea rax, [rbp-{}]", obj.offset);
-        return Ok(());
-    }
-    if let ExprKind::Unary {
-        op: UnaryOperator::DEREF,
-        expr,
-    } = &expr.kind
-    {
-        gen_expr(expr)?;
-        return Ok(());
-    }
-    Err(Error {
-        loc: expr.loc,
-        msg: "not an lvalue".to_owned(),
-    })
 }

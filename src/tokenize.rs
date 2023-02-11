@@ -28,6 +28,14 @@ impl Token {
     }
 }
 
+pub fn at_eof(tok: &Token) -> bool {
+    if let TokenKind::EOF = tok.kind {
+        true
+    } else {
+        false
+    }
+}
+
 pub fn equal(tok: &mut &Token, op: &str) -> bool {
     (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op
 }
@@ -49,6 +57,18 @@ pub fn expect(tok: &mut &Token, op: &str) -> Result<(), Error> {
         Err(Error {
             loc: tok.loc,
             msg: format!("'{}' expected, got '{}'", op, tok.text),
+        })
+    }
+}
+
+pub fn expect_number(tok: &mut &Token) -> Result<i32, Error> {
+    if let TokenKind::Num(val) = tok.kind {
+        *tok = tok.next.as_ref().unwrap();
+        Ok(val)
+    } else {
+        Err(Error {
+            loc: tok.loc,
+            msg: "expected a number".to_owned(),
         })
     }
 }

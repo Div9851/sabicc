@@ -1,4 +1,5 @@
 use sabicc::codegen;
+use sabicc::codegen::CodegenContext;
 use sabicc::error::Error;
 use sabicc::parse;
 use sabicc::tokenize;
@@ -25,16 +26,17 @@ fn main() {
         }
     };
     let mut tok = head.as_ref();
-    let f = match parse::func(&mut tok) {
-        Ok(f) => f,
-        Err(err) => {
+    println!(".intel_syntax noprefix");
+    let mut ctx = CodegenContext { label: 0 };
+    while !tokenize::at_eof(tok) {
+        let f = match parse::func(&mut tok) {
+            Ok(f) => f,
+            Err(err) => {
+                handle_error(text, err);
+            }
+        };
+        if let Err(err) = codegen::gen_func(&f, &mut ctx) {
             handle_error(text, err);
         }
-    };
-    println!(".intel_syntax noprefix");
-    println!(".globl main");
-    println!("main:");
-    if let Err(err) = codegen::gen_func(&f) {
-        handle_error(text, err);
     }
 }

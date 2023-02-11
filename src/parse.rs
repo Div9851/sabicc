@@ -7,11 +7,16 @@ use crate::tokenize::{self, Token, TokenKind};
 pub enum TypeKind {
     Int,
     Ptr(Rc<Type>),
+    Array(Rc<Type>, usize),
+    Func {
+        params: Vec<Decl>,
+        return_ty: Rc<Type>,
+    },
 }
 
 pub struct Type {
-    kind: TypeKind,
-    size: usize,
+    pub kind: TypeKind,
+    pub size: usize,
 }
 
 impl Type {
@@ -27,6 +32,21 @@ impl Type {
             size: 8,
         })
     }
+    fn new_array(base_ty: &Rc<Type>, len: usize) -> Rc<Type> {
+        Rc::new(Type {
+            kind: TypeKind::Array(Rc::clone(base_ty), len),
+            size: base_ty.size * len,
+        })
+    }
+    fn new_func(params: Vec<Decl>, return_ty: &Rc<Type>) -> Rc<Type> {
+        Rc::new(Type {
+            kind: TypeKind::Func {
+                params,
+                return_ty: Rc::clone(return_ty),
+            },
+            size: 0,
+        })
+    }
     pub fn is_int(&self) -> bool {
         match self.kind {
             TypeKind::Int => true,
@@ -35,13 +55,13 @@ impl Type {
     }
     pub fn is_ptr(&self) -> bool {
         match self.kind {
-            TypeKind::Ptr(_) => true,
+            TypeKind::Ptr(_) | TypeKind::Array(_, _) => true,
             _ => false,
         }
     }
     pub fn get_base_ty(&self) -> &Rc<Type> {
         match &self.kind {
-            TypeKind::Ptr(base_ty) => base_ty,
+            TypeKind::Ptr(base_ty) | TypeKind::Array(base_ty, _) => base_ty,
             _ => panic!("try to get base_ty of a non pointer type"),
         }
     }
@@ -91,10 +111,12 @@ fn type_of_add_expr(lhs: &Rc<Type>, rhs: &Rc<Type>, loc: usize) -> Result<Rc<Typ
         Ok(Type::new_int())
     } else if lhs.is_ptr() && rhs.is_int() {
         // `ptr + int`
-        Ok(Rc::clone(lhs))
+        let base_ty = lhs.get_base_ty();
+        Ok(Type::new_ptr(base_ty))
     } else if lhs.is_int() && rhs.is_ptr() {
         // `int + ptr`
-        Ok(Rc::clone(rhs))
+        let base_ty = rhs.get_base_ty();
+        Ok(Type::new_ptr(base_ty))
     } else {
         // `ptr + ptr`
         Err(Error {
@@ -187,13 +209,17 @@ impl ParseContext {
 }
 
 pub struct Func {
+    pub name: String,
+    pub return_ty: Rc<Type>,
+    pub params: Vec<Obj>,
     pub body: Box<Stmt>,
     pub stack_size: usize,
 }
 
+#[derive(Clone)]
 pub struct Decl {
-    name: String,
-    ty: Rc<Type>,
+    pub name: String,
+    pub ty: Rc<Type>,
 }
 
 pub enum StmtKind {
@@ -329,15 +355,34 @@ impl Expr {
 }
 
 pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
+    let loc = tok.loc;
+    let ty = declspec(tok)?;
+    let decl = declarator(tok, &ty)?;
     let mut ctx = ParseContext {
         locals: HashMap::new(),
         stack_size: 0,
     };
-    let body = compound_stmt(tok, &mut ctx)?;
-    Ok(Box::new(Func {
-        body,
-        stack_size: ctx.stack_size,
-    }))
+    match &decl.ty.kind {
+        TypeKind::Func { params, return_ty } => {
+            let mut new_params = Vec::new();
+            for param in params {
+                let obj = ctx.new_lvar(param.clone());
+                new_params.push(obj);
+            }
+            let body = compound_stmt(tok, &mut ctx)?;
+            Ok(Box::new(Func {
+                name: decl.name,
+                return_ty: Rc::clone(return_ty),
+                params: new_params,
+                body,
+                stack_size: ctx.stack_size,
+            }))
+        }
+        _ => Err(Error {
+            loc,
+            msg: "expected a function".to_owned(),
+        }),
+    }
 }
 
 // declspec = "int"
@@ -346,7 +391,40 @@ fn declspec(tok: &mut &Token) -> Result<Rc<Type>, Error> {
     Ok(Type::new_int())
 }
 
-// declarator = "*"* ident
+// func-params = "(" (param ("," param)*)? ")"
+// param       = declspec declarator
+fn func_params(tok: &mut &Token) -> Result<Vec<Decl>, Error> {
+    tokenize::expect(tok, "(")?;
+    let mut params = Vec::new();
+    while !tokenize::consume(tok, ")") {
+        if params.len() > 0 {
+            tokenize::expect(tok, ",")?;
+        }
+        let param_base_ty = declspec(tok)?;
+        let param = declarator(tok, &param_base_ty)?;
+        params.push(param);
+    }
+    Ok(params)
+}
+
+// type-suffix = func-params
+//             = "[" num "]"
+//             = ε
+fn type_suffix(tok: &mut &Token, ty: &Rc<Type>) -> Result<Rc<Type>, Error> {
+    if tokenize::equal(tok, "(") {
+        let params = func_params(tok)?;
+        Ok(Type::new_func(params, ty))
+    } else if tokenize::equal(tok, "[") {
+        tokenize::expect(tok, "[")?;
+        let len = tokenize::expect_number(tok)?;
+        tokenize::expect(tok, "]")?;
+        Ok(Type::new_array(ty, len as usize))
+    } else {
+        Ok(Rc::clone(ty))
+    }
+}
+
+// declarator = "*"* ident type-suffix
 fn declarator(tok: &mut &Token, base_ty: &Rc<Type>) -> Result<Decl, Error> {
     let mut ty = Rc::clone(base_ty);
     while tokenize::consume(tok, "*") {
@@ -359,6 +437,7 @@ fn declarator(tok: &mut &Token, base_ty: &Rc<Type>) -> Result<Decl, Error> {
         });
     }
     let ident = tokenize::consume_ident(tok).unwrap();
+    ty = type_suffix(tok, &ty)?;
     Ok(Decl {
         name: ident.text.to_owned(),
         ty,
@@ -370,23 +449,25 @@ fn declaration(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Er
     let loc = tok.loc;
     let base_ty = declspec(tok)?;
     let mut stmt_vec = Vec::new();
-    while !tokenize::equal(tok, ";") {
-        if stmt_vec.len() > 0 {
+    let mut count = 0;
+    while !tokenize::consume(tok, ";") {
+        if count > 0 {
             tokenize::expect(tok, ",")?;
         }
         let loc = tok.loc;
         let decl = declarator(tok, &base_ty)?;
         let obj = ctx.new_lvar(decl);
-        let mut lhs = Expr::new_var(obj, loc);
         if tokenize::consume(tok, "=") {
+            let lhs = Expr::new_var(obj, loc);
             let rhs = expr(tok, ctx)?;
-            lhs = Expr::new_assign(lhs, rhs, loc);
+            let expr = Expr::new_assign(lhs, rhs, loc);
+            let stmt = Box::new(Stmt {
+                kind: StmtKind::ExprStmt(expr),
+                loc,
+            });
+            stmt_vec.push(stmt);
         }
-        let stmt = Box::new(Stmt {
-            kind: StmtKind::ExprStmt(lhs),
-            loc,
-        });
-        stmt_vec.push(stmt);
+        count += 1;
     }
     Ok(Box::new(Stmt {
         kind: StmtKind::DeclStmt(stmt_vec),
