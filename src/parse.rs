@@ -783,7 +783,7 @@ fn funcall(ident: &Token, tok: &mut &Token, ctx: &mut ParseContext) -> Result<Bo
     Ok(Expr::new_funcall(&ident.text, args, ident.loc))
 }
 
-// primary = "(" expr ")" | ident | funcall | num
+// primary = "(" expr ")" | "sizeof" unary | ident | funcall | num
 fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let loc = tok.loc;
 
@@ -791,6 +791,11 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error>
         let expr = expr(tok, ctx)?;
         tokenize::expect(tok, ")")?;
         return Ok(expr);
+    }
+
+    if tokenize::consume(tok, "sizeof") {
+        let expr = unary(tok, ctx)?;
+        return Ok(Expr::new_num(expr.ty.size as i32, loc));
     }
 
     if let Some(val) = tokenize::consume_number(tok) {

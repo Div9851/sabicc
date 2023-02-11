@@ -123,6 +123,7 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "else"
         || tok.text == "for"
         || tok.text == "while"
+        || tok.text == "sizeof"
         || tok.text == "int"
     {
         tok.kind = TokenKind::Keyword;
