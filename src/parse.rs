@@ -408,7 +408,7 @@ fn func_params(tok: &mut &Token) -> Result<Vec<Decl>, Error> {
 }
 
 // type-suffix = func-params
-//             = "[" num "]"
+//             = "[" num "]" type-suffix
 //             = ε
 fn type_suffix(tok: &mut &Token, ty: &Rc<Type>) -> Result<Rc<Type>, Error> {
     if tokenize::equal(tok, "(") {
@@ -418,7 +418,8 @@ fn type_suffix(tok: &mut &Token, ty: &Rc<Type>) -> Result<Rc<Type>, Error> {
         tokenize::expect(tok, "[")?;
         let len = tokenize::expect_number(tok)?;
         tokenize::expect(tok, "]")?;
-        Ok(Type::new_array(ty, len as usize))
+        let base_ty = type_suffix(tok, ty)?;
+        Ok(Type::new_array(&base_ty, len as usize))
     } else {
         Ok(Rc::clone(ty))
     }

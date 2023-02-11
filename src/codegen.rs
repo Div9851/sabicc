@@ -206,18 +206,18 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
                 }
             };
         }
-        ExprKind::Unary { op, expr } => {
+        ExprKind::Unary { op, expr: operand } => {
             match op {
                 UnaryOperator::NEG => {
-                    gen_expr(&expr)?;
+                    gen_expr(&operand)?;
                     println!("  neg rax");
                 }
                 UnaryOperator::DEREF => {
-                    gen_expr(&expr)?;
-                    println!("  mov rax, [rax]");
+                    gen_expr(&operand)?;
+                    load(&expr.ty);
                 }
                 UnaryOperator::ADDR => {
-                    gen_addr(&expr)?;
+                    gen_addr(&operand)?;
                 }
             };
         }
