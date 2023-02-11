@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::error::Error;
-use crate::tokenize::{self, Token};
+use crate::tokenize::{self, Token, TokenKind};
 
 pub enum Type {
     Int,
@@ -137,20 +137,20 @@ pub struct ParseContext {
 }
 
 impl ParseContext {
-    pub fn new_lvar(&mut self, name: String) -> Obj {
+    pub fn new_lvar(&mut self, decl: Decl) -> Obj {
         self.stack_size += 8;
         let obj = Obj {
             offset: self.stack_size,
-            ty: Type::new_int(),
+            ty: decl.ty,
         };
-        self.locals.insert(name, obj.clone());
+        self.locals.insert(decl.name, obj.clone());
         obj
     }
-    pub fn get_lvar(&mut self, name: &str) -> Obj {
+    pub fn get_lvar(&mut self, name: &str) -> Option<Obj> {
         if let Some(obj) = self.locals.get(name) {
-            obj.clone()
+            Some(obj.clone())
         } else {
-            self.new_lvar(name.to_owned())
+            None
         }
     }
 }
@@ -160,10 +160,16 @@ pub struct Func {
     pub stack_size: usize,
 }
 
+pub struct Decl {
+    name: String,
+    ty: Rc<Type>,
+}
+
 pub enum StmtKind {
+    DeclStmt(Vec<Box<Stmt>>),
     NullStmt,
     ReturnStmt(Box<Expr>),
-    Block(Vec<Box<Stmt>>),
+    CompoundStmt(Vec<Box<Stmt>>),
     ExprStmt(Box<Expr>),
     IfStmt {
         cond: Box<Expr>,
@@ -282,20 +288,85 @@ pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
         locals: HashMap::new(),
         stack_size: 0,
     };
-    let block = block_stmt(tok, &mut ctx)?;
+    let body = compound_stmt(tok, &mut ctx)?;
     Ok(Box::new(Func {
-        body: block,
+        body,
         stack_size: ctx.stack_size,
     }))
 }
 
+// declspec = "int"
+fn declspec(tok: &mut &Token) -> Result<Rc<Type>, Error> {
+    tokenize::expect(tok, "int")?;
+    Ok(Type::new_int())
+}
+
+// declarator = "*"* ident
+fn declarator(tok: &mut &Token, base_ty: &Rc<Type>) -> Result<Decl, Error> {
+    let mut ty = Rc::clone(base_ty);
+    while tokenize::consume(tok, "*") {
+        ty = Type::new_ptr(&ty);
+    }
+    if tok.kind != TokenKind::Ident {
+        return Err(Error {
+            loc: tok.loc,
+            msg: "expected an identifier".to_owned(),
+        });
+    }
+    let name = &tok.text;
+    tokenize::consume_ident(tok);
+    Ok(Decl {
+        name: name.to_owned(),
+        ty,
+    })
+}
+
+// declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
+fn declaration(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+    let loc = tok.loc;
+    let base_ty = declspec(tok)?;
+    let mut stmt_vec = Vec::new();
+    while !tokenize::equal(tok, ";") {
+        if stmt_vec.len() > 0 {
+            tokenize::expect(tok, ",")?;
+        }
+        let loc = tok.loc;
+        let decl = declarator(tok, &base_ty)?;
+        let obj = ctx.new_lvar(decl);
+        let mut lhs = Expr::new_var(obj, loc);
+        if tokenize::consume(tok, "=") {
+            let rhs = expr(tok, ctx)?;
+            lhs = Expr::new_assign(lhs, rhs, loc);
+        }
+        let stmt = Box::new(Stmt {
+            kind: StmtKind::ExprStmt(lhs),
+            loc,
+        });
+        stmt_vec.push(stmt);
+    }
+    Ok(Box::new(Stmt {
+        kind: StmtKind::DeclStmt(stmt_vec),
+        loc,
+    }))
+}
+
+// stmt = declaration
+//      | "return" expr ";"
+//      | "if" "(" expr ")" stmt ("else" stmt)?
+//      | "for" "(" expr-stmt? ";" expr? ";" expr? ")" stmt
+//      | "while" "(" expr ")" stmt
+//      | "{" block-item* "}"
+//      | expr-stmt
+//      | null-stmt
 fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
-    if tokenize::equal(tok, ";") {
+    if tokenize::equal(tok, "int") {
+        Ok(declaration(tok, ctx)?)
+    } else if tokenize::equal(tok, ";") {
         Ok(null_stmt(tok)?)
     } else if tokenize::equal(tok, "return") {
         Ok(return_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "{") {
-        Ok(block_stmt(tok, ctx)?)
+        Ok(compound_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "if") {
         Ok(if_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "for") {
@@ -328,7 +399,7 @@ fn return_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Er
     Ok(Box::new(stmt))
 }
 
-fn block_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
+fn compound_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
     let loc = tok.loc;
     tokenize::expect(tok, "{")?;
     let mut block = Vec::new();
@@ -336,7 +407,7 @@ fn block_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Err
         block.push(stmt(tok, ctx)?);
     }
     let stmt = Stmt {
-        kind: StmtKind::Block(block),
+        kind: StmtKind::CompoundStmt(block),
         loc,
     };
     Ok(Box::new(stmt))
@@ -552,7 +623,14 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error>
     }
 
     if let Some(name) = tokenize::consume_ident(tok) {
-        return Ok(Expr::new_var(ctx.get_lvar(name), loc));
+        if let Some(obj) = ctx.get_lvar(name) {
+            return Ok(Expr::new_var(obj, loc));
+        } else {
+            return Err(Error {
+                loc,
+                msg: "undefined variable".to_owned(),
+            });
+        }
     }
 
     Err(Error {

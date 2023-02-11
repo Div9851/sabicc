@@ -31,6 +31,12 @@ pub fn gen_func(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
 
 fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
     match &stmt.kind {
+        StmtKind::DeclStmt(stmt_vec) => {
+            for stmt in stmt_vec {
+                gen_stmt(stmt, ctx)?;
+            }
+            Ok(())
+        }
         StmtKind::NullStmt => Ok(()),
         StmtKind::ExprStmt(expr) => {
             gen_expr(expr)?;
@@ -43,8 +49,8 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
             println!("  ret");
             Ok(())
         }
-        StmtKind::Block(block) => {
-            for stmt in block {
+        StmtKind::CompoundStmt(stmt_vec) => {
+            for stmt in stmt_vec {
                 gen_stmt(stmt, ctx)?;
             }
             Ok(())
