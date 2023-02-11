@@ -228,7 +228,10 @@ pub enum ExprKind {
     },
     Var(Obj),
     Num(i32),
-    FunCall(String),
+    FunCall {
+        name: String,
+        args: Vec<Box<Expr>>,
+    },
 }
 
 pub struct Expr {
@@ -282,9 +285,12 @@ impl Expr {
             loc,
         })
     }
-    fn new_funcall(name: &str, loc: usize) -> Box<Expr> {
+    fn new_funcall(name: &str, args: Vec<Box<Expr>>, loc: usize) -> Box<Expr> {
         Box::new(Expr {
-            kind: ExprKind::FunCall(name.to_owned()),
+            kind: ExprKind::FunCall {
+                name: name.to_owned(),
+                args,
+            },
             ty: Type::new_int(),
             loc,
         })
@@ -321,10 +327,9 @@ fn declarator(tok: &mut &Token, base_ty: &Rc<Type>) -> Result<Decl, Error> {
             msg: "expected an identifier".to_owned(),
         });
     }
-    let name = &tok.text;
-    tokenize::consume_ident(tok);
+    let ident = tokenize::consume_ident(tok).unwrap();
     Ok(Decl {
-        name: name.to_owned(),
+        name: ident.text.to_owned(),
         ty,
     })
 }
@@ -616,8 +621,20 @@ fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     }
 }
 
-// primary = "(" expr ")" | ident args? | num
-// args = "(" ")"
+// funcall = ident "(" (expr ("," expr)*)? ")"
+fn funcall(ident: &Token, tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    tokenize::expect(tok, "(")?;
+    let mut args = Vec::new();
+    while !tokenize::consume(tok, ")") {
+        if args.len() > 0 {
+            tokenize::expect(tok, ",")?;
+        }
+        args.push(expr(tok, ctx)?);
+    }
+    Ok(Expr::new_funcall(&ident.text, args, ident.loc))
+}
+
+// primary = "(" expr ")" | ident | funcall | num
 fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let loc = tok.loc;
 
@@ -631,14 +648,13 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error>
         return Ok(Expr::new_num(val, loc));
     }
 
-    if let Some(name) = tokenize::consume_ident(tok) {
+    if let Some(ident) = tokenize::consume_ident(tok) {
         // Function call
-        if tokenize::consume(tok, "(") {
-            tokenize::expect(tok, ")")?;
-            return Ok(Expr::new_funcall(name, loc));
+        if tokenize::equal(tok, "(") {
+            return funcall(ident, tok, ctx);
         }
         // Variable
-        if let Some(obj) = ctx.find_lvar(name) {
+        if let Some(obj) = ctx.find_lvar(&ident.text) {
             return Ok(Expr::new_var(obj, loc));
         } else {
             return Err(Error {

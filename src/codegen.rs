@@ -185,7 +185,17 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
         ExprKind::Num(val) => {
             println!("  mov rax, {}", val);
         }
-        ExprKind::FunCall(name) => {
+        ExprKind::FunCall { name, args } => {
+            let argreg = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+            let mut nargs = 0;
+            for arg in args {
+                gen_expr(arg)?;
+                push();
+                nargs += 1;
+            }
+            for i in (0..nargs).rev() {
+                pop(argreg[i]);
+            }
             // RSP must be align to 16
             // it looks like not elegant way...
             println!("  mov rbx, rsp");

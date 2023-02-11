@@ -62,11 +62,11 @@ pub fn consume_number(tok: &mut &Token) -> Option<i32> {
     }
 }
 
-pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a str> {
+pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a Token> {
     if tok.kind == TokenKind::Ident {
-        let name = &tok.text;
+        let ident = *tok;
         *tok = tok.next.as_ref().unwrap();
-        Some(name)
+        Some(ident)
     } else {
         None
     }
