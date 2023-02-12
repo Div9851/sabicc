@@ -36,7 +36,7 @@ pub fn at_eof(tok: &Token) -> bool {
     }
 }
 
-pub fn equal(tok: &mut &Token, op: &str) -> bool {
+pub fn equal(tok: &Token, op: &str) -> bool {
     (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op
 }
 
@@ -125,6 +125,7 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "while"
         || tok.text == "sizeof"
         || tok.text == "int"
+        || tok.text == "char"
     {
         tok.kind = TokenKind::Keyword;
     }

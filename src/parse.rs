@@ -7,6 +7,7 @@ use crate::tokenize::{self, Token, TokenKind};
 
 pub enum TypeKind {
     Int,
+    Char,
     Ptr(Rc<Type>),
     Array(Rc<Type>, usize),
     Func {
@@ -25,6 +26,12 @@ impl Type {
         Rc::new(Type {
             kind: TypeKind::Int,
             size: 8,
+        })
+    }
+    fn new_char() -> Rc<Type> {
+        Rc::new(Type {
+            kind: TypeKind::Char,
+            size: 1,
         })
     }
     fn new_ptr(base_ty: &Rc<Type>) -> Rc<Type> {
@@ -48,9 +55,9 @@ impl Type {
             size: 0,
         })
     }
-    pub fn is_int(&self) -> bool {
+    pub fn is_integer(&self) -> bool {
         match self.kind {
-            TypeKind::Int => true,
+            TypeKind::Int | TypeKind::Char => true,
             _ => false,
         }
     }
@@ -73,19 +80,6 @@ impl Type {
         match &self.kind {
             TypeKind::Ptr(base_ty) | TypeKind::Array(base_ty, _) => base_ty,
             _ => panic!("try to get base_ty of a non pointer type"),
-        }
-    }
-    pub fn equal(a: &Self, b: &Self) -> bool {
-        if a.is_int() {
-            b.is_int()
-        } else {
-            let a_base_ty = a.get_base_ty();
-            if b.is_ptr() {
-                let b_base_ty = b.get_base_ty();
-                Type::equal(a_base_ty, b_base_ty)
-            } else {
-                false
-            }
         }
     }
 }
@@ -274,7 +268,7 @@ impl Expr {
             BinaryOp::ADD => Expr::new_add(lhs, rhs, loc),
             BinaryOp::SUB => Expr::new_sub(lhs, rhs, loc),
             BinaryOp::MUL | BinaryOp::DIV => {
-                if lhs.ty.is_int() && rhs.ty.is_int() {
+                if lhs.ty.is_integer() && rhs.ty.is_integer() {
                     let expr = Expr {
                         kind: ExprKind::Binary { op, lhs, rhs },
                         ty: Type::new_int(),
@@ -300,14 +294,14 @@ impl Expr {
     }
 
     fn new_add(mut lhs: Box<Expr>, mut rhs: Box<Expr>, loc: usize) -> Result<Box<Expr>, Error> {
-        if lhs.ty.is_int() && rhs.ty.is_ptr() {
+        if lhs.ty.is_integer() && rhs.ty.is_ptr() {
             mem::swap(&mut lhs, &mut rhs);
         }
         let result_ty;
-        if lhs.ty.is_int() && rhs.ty.is_int() {
+        if lhs.ty.is_integer() && rhs.ty.is_integer() {
             // `int + int`
             result_ty = Type::new_int();
-        } else if lhs.ty.is_ptr() && rhs.ty.is_int() {
+        } else if lhs.ty.is_ptr() && rhs.ty.is_integer() {
             // `ptr + int`
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
@@ -337,10 +331,10 @@ impl Expr {
     fn new_sub(lhs: Box<Expr>, mut rhs: Box<Expr>, loc: usize) -> Result<Box<Expr>, Error> {
         let result_ty;
         let mut div = 1;
-        if lhs.ty.is_int() && rhs.ty.is_int() {
+        if lhs.ty.is_integer() && rhs.ty.is_integer() {
             // `int - int`
             result_ty = Type::new_int();
-        } else if lhs.ty.is_ptr() && rhs.ty.is_int() {
+        } else if lhs.ty.is_ptr() && rhs.ty.is_integer() {
             // `ptr - int`
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
@@ -349,7 +343,7 @@ impl Expr {
                 loc,
             )?;
             result_ty = Rc::clone(&lhs.ty);
-        } else if lhs.ty.is_int() && rhs.ty.is_ptr() {
+        } else if lhs.ty.is_integer() && rhs.ty.is_ptr() {
             // `int - ptr`
             return Err(Error {
                 loc,
@@ -357,13 +351,8 @@ impl Expr {
             });
         } else {
             // `ptr - ptr`
-            if !Type::equal(&lhs.ty, &rhs.ty) {
-                return Err(Error {
-                    loc,
-                    msg: "invalid operands".to_owned(),
-                });
-            }
-            div = lhs.ty.size as i32;
+            // todo: type check
+            div = lhs.ty.get_base_ty().size as i32;
             result_ty = Type::new_int();
         }
         let mut expr = Box::new(Expr {
@@ -385,7 +374,7 @@ impl Expr {
         let result_ty;
         match op {
             UnaryOp::NEG => {
-                if expr.ty.is_int() {
+                if expr.ty.is_integer() {
                     result_ty = Type::new_int();
                 } else {
                     return Err(Error {
@@ -523,8 +512,16 @@ fn is_func(tok: &mut &Token) -> bool {
     }
 }
 
-// declspec = "int"
+// Returns true if a given token represents a type.
+fn is_typename(tok: &Token) -> bool {
+    tokenize::equal(tok, "char") || tokenize::equal(tok, "int")
+}
+
+// declspec = "char" | "int"
 fn declspec(tok: &mut &Token) -> Result<Rc<Type>, Error> {
+    if tokenize::consume(tok, "char") {
+        return Ok(Type::new_char());
+    }
     tokenize::expect(tok, "int")?;
     Ok(Type::new_int())
 }
@@ -623,7 +620,7 @@ fn declaration(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Er
 //      | expr-stmt
 //      | null-stmt
 fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Error> {
-    if tokenize::equal(tok, "int") {
+    if is_typename(tok) {
         Ok(declaration(tok, ctx)?)
     } else if tokenize::equal(tok, ";") {
         Ok(null_stmt(tok)?)

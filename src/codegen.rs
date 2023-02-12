@@ -5,8 +5,10 @@ use crate::{
         UnaryOp,
     },
 };
+use std::unreachable;
 
-static ARGREG: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+static ARGREG64: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+static ARGREG8: [&'static str; 6] = ["dil", "sil", "dl", "cl", "r8b", "r9b"];
 
 // Round up `n` to the nearest multiple of `align`. For instance,
 // align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
@@ -24,6 +26,17 @@ fn push() {
 
 fn pop(reg: &str) {
     println!("  pop {}", reg);
+}
+
+// Store rax to an address that the stack top is pointing to.
+fn store(ty: &Type) {
+    pop("rdi");
+
+    if ty.size == 1 {
+        println!("  mov [rdi], al");
+    } else {
+        println!("  mov [rdi], rax");
+    }
 }
 
 // Compute the absolute address to a given node.
@@ -64,7 +77,12 @@ fn load(ty: &Type) {
     if let TypeKind::Array(_, _) = ty.kind {
         return;
     }
-    println!("  mov rax, [rax]");
+
+    if ty.size == 1 {
+        println!("  movsbq rax, [rax]");
+    } else {
+        println!("  mov rax, [rax]");
+    }
 }
 
 pub fn gen_program(program: &Program) -> Result<(), Error> {
@@ -101,15 +119,19 @@ fn emit_text(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
     println!("  push rbp");
     println!("  mov rbp, rsp");
     println!("  sub rsp, {}", align_to(func.stack_size, 16));
+    // Save passed-by-register arguments to the stack
     let mut nargs = 0;
     for obj in &func.params {
         if let ObjKind::Local(offset) = obj.kind {
-            println!("  lea rax, [rbp-{}]", offset);
-            println!("  mov [rax], {}", ARGREG[nargs]);
-            nargs += 1;
+            if obj.ty.size == 1 {
+                println!("  mov [rbp-{}], {}", offset, ARGREG8[nargs]);
+            } else {
+                println!("  mov [rbp-{}], {}", offset, ARGREG64[nargs]);
+            }
         } else {
-            panic!("")
+            unreachable!();
         }
+        nargs += 1;
     }
     // Body
     gen_stmt(&func.body, ctx)?;
@@ -203,8 +225,7 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
             gen_addr(&lhs)?;
             push();
             gen_expr(&rhs)?;
-            pop("rdi");
-            println!("  mov [rdi], rax");
+            store(&expr.ty);
         }
         ExprKind::Binary { op, lhs, rhs } => {
             gen_expr(&rhs)?;
