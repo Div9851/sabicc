@@ -142,6 +142,41 @@ fn convert_keyword(tok: &mut Token) {
     }
 }
 
+fn read_escaped_char(bytes: &[u8], pos: &mut usize) -> Option<u8> {
+    if *pos >= bytes.len() {
+        return None;
+    }
+    if bytes[*pos] == b'a' {
+        *pos += 1;
+        Some(7)
+    } else if bytes[*pos] == b'b' {
+        *pos += 1;
+        Some(8)
+    } else if bytes[*pos] == b't' {
+        *pos += 1;
+        Some(b'\t')
+    } else if bytes[*pos] == b'n' {
+        *pos += 1;
+        Some(b'\n')
+    } else if bytes[*pos] == b'v' {
+        *pos += 1;
+        Some(11)
+    } else if bytes[*pos] == b'f' {
+        *pos += 1;
+        Some(12)
+    } else if bytes[*pos] == b'r' {
+        *pos += 1;
+        Some(b'\r')
+    } else if bytes[*pos] == b'e' {
+        *pos += 1;
+        Some(27)
+    } else {
+        let ch = bytes[*pos];
+        *pos += 1;
+        Some(ch)
+    }
+}
+
 fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<String, Error> {
     let mut s = String::new();
     while *pos < bytes.len() {
@@ -151,6 +186,15 @@ fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<String, Error> {
         }
         if bytes[*pos] == b'\n' {
             break;
+        }
+        if bytes[*pos] == b'\\' {
+            *pos += 1;
+            if let Some(ch) = read_escaped_char(bytes, pos) {
+                s.push(ch as char);
+            } else {
+                break;
+            }
+            continue;
         }
         s.push(bytes[*pos] as char);
         *pos += 1;
