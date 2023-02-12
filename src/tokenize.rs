@@ -142,11 +142,27 @@ fn convert_keyword(tok: &mut Token) {
     }
 }
 
+fn is_octdigit(ch: u8) -> bool {
+    b'0' <= ch && ch <= b'7'
+}
+
 fn read_escaped_char(bytes: &[u8], pos: &mut usize) -> Option<u8> {
     if *pos >= bytes.len() {
         return None;
     }
-    if bytes[*pos] == b'a' {
+    if is_octdigit(bytes[*pos]) {
+        let mut c = bytes[*pos] - b'0';
+        *pos += 1;
+        if *pos < bytes.len() && is_octdigit(bytes[*pos]) {
+            c = c * 8 + (bytes[*pos] - b'0');
+            *pos += 1;
+            if *pos < bytes.len() && is_octdigit(bytes[*pos]) {
+                c = c * 8 + (bytes[*pos] - b'0');
+                *pos += 1;
+            }
+        }
+        Some(c)
+    } else if bytes[*pos] == b'a' {
         *pos += 1;
         Some(7)
     } else if bytes[*pos] == b'b' {
