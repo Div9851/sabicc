@@ -244,6 +244,7 @@ pub enum UnaryOp {
 }
 
 pub enum ExprKind {
+    StmtExpr(Vec<Box<Stmt>>),
     Assign {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
@@ -908,14 +909,53 @@ fn funcall(ident: &Token, tok: &mut &Token, ctx: &mut ParseContext) -> Result<Bo
     Ok(Expr::new_funcall(&ident.text, args, ident.loc))
 }
 
-// primary = "(" expr ")" | "sizeof" unary | ident | funcall | str | num
+fn stmt_expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
+    let loc = tok.loc;
+    let stmt = compound_stmt(tok, ctx)?;
+    if let StmtKind::CompoundStmt(stmt_vec) = stmt.kind {
+        if stmt_vec.is_empty() {
+            return Err(Error {
+                loc,
+                msg: "statement expression returning void is not supported".to_owned(),
+            });
+        }
+        if let StmtKind::ExprStmt(expr) = &stmt_vec.last().unwrap().kind {
+            let ty = Rc::clone(&expr.ty);
+            let expr = Expr {
+                kind: ExprKind::StmtExpr(stmt_vec),
+                ty,
+                loc,
+            };
+            return Ok(Box::new(expr));
+        } else {
+            return Err(Error {
+                loc,
+                msg: "statement expression returning void is not supported".to_owned(),
+            });
+        }
+    } else {
+        unreachable!();
+    }
+}
+
+// primary = "(" "{" stmt+ "}" ")"
+//         | "(" expr ")"
+//         | "sizeof" unary
+//         | ident func-args?
+//         | str
+//         | num
 fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let loc = tok.loc;
 
     if tokenize::consume(tok, "(") {
-        let expr = expr(tok, ctx)?;
+        let inner;
+        if tokenize::equal(tok, "{") {
+            inner = stmt_expr(tok, ctx)?;
+        } else {
+            inner = expr(tok, ctx)?
+        }
         tokenize::expect(tok, ")")?;
-        return Ok(expr);
+        return Ok(inner);
     }
 
     if tokenize::consume(tok, "sizeof") {

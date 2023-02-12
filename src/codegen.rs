@@ -37,7 +37,7 @@ fn store(ty: &Type) {
 
 // Compute the absolute address to a given node.
 // It's an error if a given node does not reside in memory.
-fn gen_addr(expr: &Expr) -> Result<(), Error> {
+fn gen_addr(expr: &Expr, ctx: &mut CodegenContext) -> Result<(), Error> {
     if let ExprKind::Var(obj) = &expr.kind {
         match &obj.kind {
             ObjKind::Local(offset) => {
@@ -54,7 +54,7 @@ fn gen_addr(expr: &Expr) -> Result<(), Error> {
         expr,
     } = &expr.kind
     {
-        gen_expr(expr)?;
+        gen_expr(expr, ctx)?;
         return Ok(());
     }
     Err(Error {
@@ -159,11 +159,11 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
         }
         StmtKind::NullStmt => Ok(()),
         StmtKind::ExprStmt(expr) => {
-            gen_expr(expr)?;
+            gen_expr(expr, ctx)?;
             Ok(())
         }
         StmtKind::ReturnStmt(expr) => {
-            gen_expr(&expr)?;
+            gen_expr(&expr, ctx)?;
             println!("  mov rsp, rbp");
             println!("  pop rbp");
             println!("  ret");
@@ -176,7 +176,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
             Ok(())
         }
         StmtKind::IfStmt { cond, then, els } => {
-            gen_expr(&cond)?;
+            gen_expr(&cond, ctx)?;
             println!("  cmp rax, 0");
             println!("  je .L.else.{}", ctx.id);
             gen_stmt(then, ctx)?;
@@ -198,13 +198,13 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
             gen_stmt(init, ctx)?;
             println!(".L.begin.{}:", ctx.id);
             if let Some(cond) = cond {
-                gen_expr(cond)?;
+                gen_expr(cond, ctx)?;
                 println!("  cmp rax, 0");
                 println!("  je .L.end.{}", ctx.id);
             }
             gen_stmt(body, ctx)?;
             if let Some(inc) = inc {
-                gen_expr(inc)?;
+                gen_expr(inc, ctx)?;
             }
             println!("  jmp .L.begin.{}", ctx.id);
             println!(".L.end.{}:", ctx.id);
@@ -213,7 +213,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
         }
         StmtKind::WhileStmt { cond, body } => {
             println!(".L.begin.{}:", ctx.id);
-            gen_expr(cond)?;
+            gen_expr(cond, ctx)?;
             println!("  cmp rax, 0");
             println!("  je .L.end.{}", ctx.id);
             gen_stmt(body, ctx)?;
@@ -226,18 +226,23 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
 }
 
 // Generate code for a given node.
-fn gen_expr(expr: &Expr) -> Result<(), Error> {
+fn gen_expr(expr: &Expr, ctx: &mut CodegenContext) -> Result<(), Error> {
     match &expr.kind {
+        ExprKind::StmtExpr(stmt_vec) => {
+            for stmt in stmt_vec {
+                gen_stmt(stmt, ctx)?;
+            }
+        }
         ExprKind::Assign { lhs, rhs } => {
-            gen_addr(&lhs)?;
+            gen_addr(&lhs, ctx)?;
             push();
-            gen_expr(&rhs)?;
+            gen_expr(&rhs, ctx)?;
             store(&expr.ty);
         }
         ExprKind::Binary { op, lhs, rhs } => {
-            gen_expr(&rhs)?;
+            gen_expr(&rhs, ctx)?;
             push();
-            gen_expr(&lhs)?;
+            gen_expr(&lhs, ctx)?;
             pop("rdi");
             match op {
                 BinaryOp::ADD => {
@@ -278,20 +283,20 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
         ExprKind::Unary { op, expr: operand } => {
             match op {
                 UnaryOp::NEG => {
-                    gen_expr(&operand)?;
+                    gen_expr(&operand, ctx)?;
                     println!("  neg rax");
                 }
                 UnaryOp::DEREF => {
-                    gen_expr(&operand)?;
+                    gen_expr(&operand, ctx)?;
                     load(&expr.ty);
                 }
                 UnaryOp::ADDR => {
-                    gen_addr(&operand)?;
+                    gen_addr(&operand, ctx)?;
                 }
             };
         }
         ExprKind::Var(_) => {
-            gen_addr(expr)?;
+            gen_addr(expr, ctx)?;
             load(&expr.ty);
         }
         ExprKind::Num(val) => {
@@ -301,7 +306,7 @@ fn gen_expr(expr: &Expr) -> Result<(), Error> {
             let argreg = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
             let mut nargs = 0;
             for arg in args {
-                gen_expr(arg)?;
+                gen_expr(arg, ctx)?;
                 push();
                 nargs += 1;
             }
