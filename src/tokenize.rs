@@ -1,10 +1,11 @@
 use crate::error::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TokenKind {
     Ident,    // Identifiers
     Punct,    // Punctuators
     Keyword,  // Keywords
+    Str,      // String literals
     Num(i32), // Numeric literals
     EOF,      // End-of-file markers
 }
@@ -92,6 +93,16 @@ pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a Token> {
     }
 }
 
+pub fn consume_str<'a>(tok: &mut &'a Token) -> Option<&'a Token> {
+    if tok.kind == TokenKind::Str {
+        let s = *tok;
+        *tok = tok.next.as_ref().unwrap();
+        Some(s)
+    } else {
+        None
+    }
+}
+
 // Returns true if c is valid as the first character of an identifier.
 fn is_ident1(c: u8) -> bool {
     (b'a' <= c && c <= b'z') || (b'A' <= c && c <= b'Z') || c == b'_'
@@ -131,6 +142,25 @@ fn convert_keyword(tok: &mut Token) {
     }
 }
 
+fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<String, Error> {
+    let mut s = String::new();
+    while *pos < bytes.len() {
+        if bytes[*pos] == b'"' {
+            *pos += 1;
+            return Ok(s);
+        }
+        if bytes[*pos] == b'\n' {
+            break;
+        }
+        s.push(bytes[*pos] as char);
+        *pos += 1;
+    }
+    Err(Error {
+        loc: *pos,
+        msg: "unclosed string literal".to_owned(),
+    })
+}
+
 pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
     let mut head = Token::new(TokenKind::Punct, 0, "");
     let mut cur = head.as_mut();
@@ -152,6 +182,17 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
             }
             let val = i32::from_str_radix(&text[loc..pos], 10).unwrap();
             let tok = Token::new(TokenKind::Num(val), loc, &text[loc..pos]);
+            cur.next = Some(tok);
+            cur = cur.next.as_mut().unwrap();
+            continue;
+        }
+
+        // String literal
+        if bytes[pos] == b'"' {
+            pos += 1;
+            let loc = pos;
+            let s = read_string_literal(bytes, &mut pos)?;
+            let tok = Token::new(TokenKind::Str, loc, &s);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
             continue;

@@ -34,6 +34,9 @@ impl Type {
             size: 1,
         })
     }
+    fn new_str(len: usize) -> Rc<Type> {
+        Type::new_array(&Type::new_char(), len)
+    }
     fn new_ptr(base_ty: &Rc<Type>) -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Ptr(Rc::clone(base_ty)),
@@ -98,13 +101,17 @@ pub struct Obj {
 
 pub struct ParseContext {
     pub scopes: Vec<HashMap<String, Obj>>,
+    pub init_data: HashMap<String, String>,
+    pub id: usize,
     pub stack_size: usize,
 }
 
-impl<'a> ParseContext {
+impl ParseContext {
     pub fn new() -> ParseContext {
         ParseContext {
             scopes: Vec::new(),
+            init_data: HashMap::new(),
+            id: 0,
             stack_size: 0,
         }
     }
@@ -135,6 +142,21 @@ impl<'a> ParseContext {
             .first_mut()
             .unwrap()
             .insert(decl.name.clone(), obj.clone());
+        obj
+    }
+    fn new_unique_name(&mut self) -> String {
+        let name = format!(".L..{}", self.id);
+        self.id += 1;
+        name
+    }
+    fn new_str(&mut self, text: &str) -> Obj {
+        let name = self.new_unique_name();
+        let decl = Decl {
+            name: name.clone(),
+            ty: Type::new_str(text.len() + 1),
+        };
+        let obj = self.new_gvar(&decl);
+        self.init_data.insert(name, text.to_owned());
         obj
     }
     pub fn find_var(&mut self, name: &str) -> Option<Obj> {
@@ -886,7 +908,7 @@ fn funcall(ident: &Token, tok: &mut &Token, ctx: &mut ParseContext) -> Result<Bo
     Ok(Expr::new_funcall(&ident.text, args, ident.loc))
 }
 
-// primary = "(" expr ")" | "sizeof" unary | ident | funcall | num
+// primary = "(" expr ")" | "sizeof" unary | ident | funcall | str | num
 fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error> {
     let loc = tok.loc;
 
@@ -919,6 +941,11 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error>
                 msg: "undefined variable".to_owned(),
             });
         }
+    }
+
+    if let Some(str_tok) = tokenize::consume_str(tok) {
+        let obj = ctx.new_str(&str_tok.text);
+        return Ok(Expr::new_var(obj, loc));
     }
 
     Err(Error {

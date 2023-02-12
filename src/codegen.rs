@@ -16,10 +16,6 @@ fn align_to(n: usize, align: usize) -> usize {
     (n + align - 1) / align * align
 }
 
-pub struct CodegenContext {
-    pub label: usize,
-}
-
 fn push() {
     println!("  push rax");
 }
@@ -47,8 +43,8 @@ fn gen_addr(expr: &Expr) -> Result<(), Error> {
             ObjKind::Local(offset) => {
                 println!("  lea rax, [rbp-{}]", offset);
             }
-            ObjKind::Global(label) => {
-                println!("  lea rax, {}[rip]", label);
+            ObjKind::Global(name) => {
+                println!("  lea rax, {}[rip]", name);
             }
         }
         return Ok(());
@@ -85,27 +81,38 @@ fn load(ty: &Type) {
     }
 }
 
+pub struct CodegenContext {
+    pub id: usize,
+}
+
 pub fn gen_program(program: &Program) -> Result<(), Error> {
     println!(".intel_syntax noprefix");
     let globals = program.ctx.scopes.first().unwrap();
     for (_, obj) in globals {
-        emit_data(obj)?;
+        emit_data(obj, program)?;
     }
+    let mut ctx = CodegenContext { id: 0 };
     let funcs = &program.funcs;
-    let mut ctx = &mut CodegenContext { label: 0 };
     for f in funcs {
         emit_text(f, &mut ctx)?;
     }
     Ok(())
 }
 
-fn emit_data(obj: &Obj) -> Result<(), Error> {
+fn emit_data(obj: &Obj, program: &Program) -> Result<(), Error> {
     if let ObjKind::Global(name) = &obj.kind {
         if !obj.ty.is_func() {
             println!(".data");
             println!(".globl {}", name);
             println!("{}:", name);
-            println!("  .zero {}", obj.ty.size);
+            if let Some(text) = program.ctx.init_data.get(name) {
+                for b in text.as_bytes() {
+                    println!("  .byte {}", b);
+                }
+                println!("  .byte 0");
+            } else {
+                println!("  .zero {}", obj.ty.size);
+            }
         }
     }
     Ok(())
@@ -171,15 +178,15 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
         StmtKind::IfStmt { cond, then, els } => {
             gen_expr(&cond)?;
             println!("  cmp rax, 0");
-            println!("  je .L.else.{}", ctx.label);
+            println!("  je .L.else.{}", ctx.id);
             gen_stmt(then, ctx)?;
-            println!("  jmp .L.end.{}", ctx.label);
-            println!(".L.else.{}:", ctx.label);
+            println!("  jmp .L.end.{}", ctx.id);
+            println!(".L.else.{}:", ctx.id);
             if let Some(els) = els {
                 gen_stmt(els, ctx)?;
             }
-            println!(".L.end.{}:", ctx.label);
-            ctx.label += 1;
+            println!(".L.end.{}:", ctx.id);
+            ctx.id += 1;
             Ok(())
         }
         StmtKind::ForStmt {
@@ -189,30 +196,30 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), Error> {
             body,
         } => {
             gen_stmt(init, ctx)?;
-            println!(".L.begin.{}:", ctx.label);
+            println!(".L.begin.{}:", ctx.id);
             if let Some(cond) = cond {
                 gen_expr(cond)?;
                 println!("  cmp rax, 0");
-                println!("  je .L.end.{}", ctx.label);
+                println!("  je .L.end.{}", ctx.id);
             }
             gen_stmt(body, ctx)?;
             if let Some(inc) = inc {
                 gen_expr(inc)?;
             }
-            println!("  jmp .L.begin.{}", ctx.label);
-            println!(".L.end.{}:", ctx.label);
-            ctx.label += 1;
+            println!("  jmp .L.begin.{}", ctx.id);
+            println!(".L.end.{}:", ctx.id);
+            ctx.id += 1;
             Ok(())
         }
         StmtKind::WhileStmt { cond, body } => {
-            println!(".L.begin.{}:", ctx.label);
+            println!(".L.begin.{}:", ctx.id);
             gen_expr(cond)?;
             println!("  cmp rax, 0");
-            println!("  je .L.end.{}", ctx.label);
+            println!("  je .L.end.{}", ctx.id);
             gen_stmt(body, ctx)?;
-            println!("  jmp .L.begin.{}", ctx.label);
-            println!(".L.end.{}:", ctx.label);
-            ctx.label += 1;
+            println!("  jmp .L.begin.{}", ctx.id);
+            println!(".L.end.{}:", ctx.id);
+            ctx.id += 1;
             Ok(())
         }
     }
