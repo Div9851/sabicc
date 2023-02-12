@@ -60,6 +60,15 @@ impl Type {
             _ => false,
         }
     }
+    pub fn is_func(&self) -> bool {
+        match self.kind {
+            TypeKind::Func {
+                params: _,
+                return_ty: _,
+            } => true,
+            _ => false,
+        }
+    }
     pub fn get_base_ty(&self) -> &Rc<Type> {
         match &self.kind {
             TypeKind::Ptr(base_ty) | TypeKind::Array(base_ty, _) => base_ty,
@@ -93,38 +102,67 @@ pub struct Obj {
     pub ty: Rc<Type>,
 }
 
-pub struct ParseContext<'a> {
-    pub locals: HashMap<String, Obj>,
-    pub globals: &'a mut HashMap<String, Obj>,
+pub struct ParseContext {
+    pub scopes: Vec<HashMap<String, Obj>>,
     pub stack_size: usize,
 }
 
-impl<'a> ParseContext<'a> {
-    pub fn register_local(&mut self, decl: &Decl) -> Obj {
+impl<'a> ParseContext {
+    pub fn new() -> ParseContext {
+        ParseContext {
+            scopes: Vec::new(),
+            stack_size: 0,
+        }
+    }
+    pub fn enter_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+    pub fn exit_scope(&mut self) {
+        self.scopes.pop();
+    }
+    pub fn new_lvar(&mut self, decl: &Decl) -> Obj {
         self.stack_size += decl.ty.size;
         let obj = Obj {
             kind: ObjKind::Local(self.stack_size),
             ty: Rc::clone(&decl.ty),
         };
-        self.locals.insert(decl.name.clone(), obj.clone());
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .insert(decl.name.clone(), obj.clone());
         obj
     }
-    pub fn register_global(&mut self, decl: &Decl) -> Obj {
+    fn new_gvar(&mut self, decl: &Decl) -> Obj {
         let obj = Obj {
             kind: ObjKind::Global(decl.name.clone()),
             ty: Rc::clone(&decl.ty),
         };
-        self.globals.insert(decl.name.clone(), obj.clone());
+        self.scopes
+            .first_mut()
+            .unwrap()
+            .insert(decl.name.clone(), obj.clone());
         obj
     }
     pub fn find_var(&mut self, name: &str) -> Option<Obj> {
-        if let Some(obj) = self.locals.get(name) {
-            Some(obj.clone())
-        } else if let Some(obj) = self.globals.get(name) {
-            Some(obj.clone())
-        } else {
-            None
+        for scope in self.scopes.iter().rev() {
+            if let Some(obj) = scope.get(name) {
+                return Some(obj.clone());
+            }
         }
+        None
+    }
+}
+
+pub struct Program {
+    pub funcs: Vec<Box<Func>>,
+    pub ctx: ParseContext,
+}
+
+impl Program {
+    fn new() -> Program {
+        let funcs = Vec::new();
+        let ctx = ParseContext::new();
+        Program { funcs, ctx }
     }
 }
 
@@ -403,36 +441,85 @@ impl Expr {
     }
 }
 
-pub fn func(tok: &mut &Token, globals: &mut HashMap<String, Obj>) -> Result<Box<Func>, Error> {
-    let loc = tok.loc;
-    let ty = declspec(tok)?;
-    let decl = declarator(tok, &ty)?;
-    let mut ctx = ParseContext {
-        locals: HashMap::new(),
-        globals,
-        stack_size: 0,
-    };
-    match &decl.ty.kind {
-        TypeKind::Func { params, return_ty } => {
-            ctx.register_global(&decl);
-            let mut objs = Vec::new();
-            for param in params {
-                let obj = ctx.register_local(param);
-                objs.push(obj);
-            }
-            let body = compound_stmt(tok, &mut ctx)?;
-            Ok(Box::new(Func {
-                name: decl.name,
-                return_ty: Rc::clone(return_ty),
-                params: objs,
-                body,
-                stack_size: ctx.stack_size,
-            }))
+pub fn program(tok: &mut &Token) -> Result<Program, Error> {
+    let mut program = Program::new();
+    program.ctx.enter_scope();
+    while !tokenize::at_eof(tok) {
+        let base_ty = declspec(tok)?;
+        // Function
+        if is_func(tok) {
+            program.funcs.push(func(tok, &base_ty, &mut program.ctx)?);
+            continue;
         }
-        _ => Err(Error {
+        // Global variable
+        global_variable(tok, &base_ty, &mut program.ctx)?;
+    }
+    Ok(program)
+}
+
+fn global_variable(
+    tok: &mut &Token,
+    base_ty: &Rc<Type>,
+    ctx: &mut ParseContext,
+) -> Result<(), Error> {
+    let mut first = true;
+    while !tokenize::consume(tok, ";") {
+        if !first {
+            tokenize::expect(tok, ",")?;
+        }
+        first = false;
+        let decl = declarator(tok, base_ty)?;
+        ctx.new_gvar(&decl);
+    }
+    Ok(())
+}
+
+pub fn func(
+    tok: &mut &Token,
+    base_ty: &Rc<Type>,
+    ctx: &mut ParseContext,
+) -> Result<Box<Func>, Error> {
+    let loc = tok.loc;
+    let decl = declarator(tok, base_ty)?;
+    if let TypeKind::Func { params, return_ty } = &decl.ty.kind {
+        ctx.stack_size = 0;
+        ctx.new_gvar(&decl);
+        ctx.enter_scope();
+        let mut params_obj = Vec::new();
+        for param in params {
+            let obj = ctx.new_lvar(param);
+            params_obj.push(obj);
+        }
+        let body = compound_stmt(tok, ctx)?;
+        ctx.exit_scope();
+        Ok(Box::new(Func {
+            name: decl.name,
+            return_ty: Rc::clone(return_ty),
+            params: params_obj,
+            body,
+            stack_size: ctx.stack_size,
+        }))
+    } else {
+        Err(Error {
             loc,
             msg: "expected a function".to_owned(),
-        }),
+        })
+    }
+}
+
+// Lookahead tokens and returns true if a given token is a start
+// of a function definition or declaration.
+fn is_func(tok: &mut &Token) -> bool {
+    if tokenize::equal(tok, ";") {
+        return false;
+    }
+    let cur = *tok;
+    let dummy = Rc::new(Type::new_int());
+    let result = declarator(tok, &dummy);
+    *tok = cur;
+    match result {
+        Ok(decl) => decl.ty.is_func(),
+        Err(_) => false,
     }
 }
 
@@ -508,7 +595,7 @@ fn declaration(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Er
         }
         let loc = tok.loc;
         let decl = declarator(tok, &base_ty)?;
-        let obj = ctx.register_local(&decl);
+        let obj = ctx.new_lvar(&decl);
         if tokenize::consume(tok, "=") {
             let lhs = Expr::new_var(obj, loc);
             let rhs = expr(tok, ctx)?;

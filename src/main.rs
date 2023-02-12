@@ -1,12 +1,9 @@
 use sabicc::codegen;
-use sabicc::codegen::CodegenContext;
 use sabicc::error::Error;
 use sabicc::parse;
 use sabicc::tokenize;
 use std::env;
 use std::process;
-
-use std::collections::HashMap;
 
 fn handle_error(text: &str, err: Error) -> ! {
     eprintln!("{}", text);
@@ -28,18 +25,13 @@ fn main() {
         }
     };
     let mut tok = head.as_ref();
-    println!(".intel_syntax noprefix");
-    let mut globals = HashMap::new();
-    let mut ctx = CodegenContext { label: 0 };
-    while !tokenize::at_eof(tok) {
-        let f = match parse::func(&mut tok, &mut globals) {
-            Ok(f) => f,
-            Err(err) => {
-                handle_error(text, err);
-            }
-        };
-        if let Err(err) = codegen::gen_func(&f, &mut ctx) {
+    let program = match parse::program(&mut tok) {
+        Ok(program) => program,
+        Err(err) => {
             handle_error(text, err);
         }
+    };
+    if let Err(err) = codegen::gen_program(&program) {
+        handle_error(text, err);
     }
 }

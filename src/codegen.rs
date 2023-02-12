@@ -1,6 +1,9 @@
 use crate::{
     error::Error,
-    parse::{BinaryOp, Expr, ExprKind, Func, ObjKind, Stmt, StmtKind, Type, TypeKind, UnaryOp},
+    parse::{
+        BinaryOp, Expr, ExprKind, Func, Obj, ObjKind, Program, Stmt, StmtKind, Type, TypeKind,
+        UnaryOp,
+    },
 };
 
 static ARGREG: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -31,8 +34,8 @@ fn gen_addr(expr: &Expr) -> Result<(), Error> {
             ObjKind::Local(offset) => {
                 println!("  lea rax, [rbp-{}]", offset);
             }
-            ObjKind::Global(_) => {
-                panic!("not implemented");
+            ObjKind::Global(label) => {
+                println!("  lea rax, {}[rip]", label);
             }
         }
         return Ok(());
@@ -64,8 +67,35 @@ fn load(ty: &Type) {
     println!("  mov rax, [rax]");
 }
 
-pub fn gen_func(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
+pub fn gen_program(program: &Program) -> Result<(), Error> {
+    println!(".intel_syntax noprefix");
+    let globals = program.ctx.scopes.first().unwrap();
+    for (_, obj) in globals {
+        emit_data(obj)?;
+    }
+    let funcs = &program.funcs;
+    let mut ctx = &mut CodegenContext { label: 0 };
+    for f in funcs {
+        emit_text(f, &mut ctx)?;
+    }
+    Ok(())
+}
+
+fn emit_data(obj: &Obj) -> Result<(), Error> {
+    if let ObjKind::Global(name) = &obj.kind {
+        if !obj.ty.is_func() {
+            println!(".data");
+            println!(".globl {}", name);
+            println!("{}:", name);
+            println!("  .zero {}", obj.ty.size);
+        }
+    }
+    Ok(())
+}
+
+fn emit_text(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
     println!(".globl {}", func.name);
+    println!(".text");
     println!("{}:", func.name);
     // Prologue
     println!("  push rbp");
