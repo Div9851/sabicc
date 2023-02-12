@@ -101,7 +101,7 @@ pub struct Obj {
 
 pub struct ParseContext {
     pub scopes: Vec<HashMap<String, Obj>>,
-    pub init_data: HashMap<String, String>,
+    pub init_data: HashMap<String, Vec<u8>>,
     pub id: usize,
     pub stack_size: usize,
 }
@@ -149,14 +149,14 @@ impl ParseContext {
         self.id += 1;
         name
     }
-    fn new_str(&mut self, text: &str) -> Obj {
+    fn new_str(&mut self, bytes: Vec<u8>) -> Obj {
         let name = self.new_unique_name();
         let decl = Decl {
             name: name.clone(),
-            ty: Type::new_str(text.len() + 1),
+            ty: Type::new_str(bytes.len() + 1),
         };
         let obj = self.new_gvar(&decl);
-        self.init_data.insert(name, text.to_owned());
+        self.init_data.insert(name, bytes);
         obj
     }
     pub fn find_var(&mut self, name: &str) -> Option<Obj> {
@@ -943,8 +943,8 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error>
         }
     }
 
-    if let Some(str_tok) = tokenize::consume_str(tok) {
-        let obj = ctx.new_str(&str_tok.text);
+    if let Some(bytes) = tokenize::consume_str(tok) {
+        let obj = ctx.new_str(bytes.clone());
         return Ok(Expr::new_var(obj, loc));
     }
 

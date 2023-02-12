@@ -12,12 +12,13 @@ fn handle_error(text: &str, err: Error) -> ! {
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let mut args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!("{}: invalid number of arguments", args[0]);
         process::exit(1);
     }
-    let text = &args[1];
+    let text = &mut args[1];
+    text.push('\0');
     let head = match tokenize::tokenize(text) {
         Ok(tok) => tok,
         Err(err) => {

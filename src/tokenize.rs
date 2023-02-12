@@ -2,12 +2,12 @@ use crate::error::Error;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TokenKind {
-    Ident,    // Identifiers
-    Punct,    // Punctuators
-    Keyword,  // Keywords
-    Str,      // String literals
-    Num(i32), // Numeric literals
-    EOF,      // End-of-file markers
+    Ident,        // Identifiers
+    Punct,        // Punctuators
+    Keyword,      // Keywords
+    Str(Vec<u8>), // String literals
+    Num(i32),     // Numeric literals
+    EOF,          // End-of-file markers
 }
 
 // Token type
@@ -15,7 +15,7 @@ pub struct Token {
     pub kind: TokenKind,          // Token kind
     pub next: Option<Box<Token>>, // Next token
     pub loc: usize,               // Token location
-    pub text: String,             // Token text
+    pub text: String,             // Token bytes
 }
 
 impl Token {
@@ -93,11 +93,10 @@ pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a Token> {
     }
 }
 
-pub fn consume_str<'a>(tok: &mut &'a Token) -> Option<&'a Token> {
-    if tok.kind == TokenKind::Str {
-        let s = *tok;
+pub fn consume_str<'a>(tok: &mut &'a Token) -> Option<&'a Vec<u8>> {
+    if let TokenKind::Str(bytes) = &tok.kind {
         *tok = tok.next.as_ref().unwrap();
-        Some(s)
+        Some(bytes)
     } else {
         None
     }
@@ -146,56 +145,89 @@ fn is_octdigit(ch: u8) -> bool {
     b'0' <= ch && ch <= b'7'
 }
 
-fn read_escaped_char(bytes: &[u8], pos: &mut usize) -> Option<u8> {
-    if *pos >= bytes.len() {
-        return None;
+fn is_hexdigit(ch: u8) -> bool {
+    (b'0' <= ch && ch <= b'9') || (b'a' <= ch && ch <= b'f') || (b'A' <= ch && ch <= b'F')
+}
+
+fn from_hex(ch: u8) -> u8 {
+    if b'0' <= ch && ch <= b'9' {
+        ch - b'0'
+    } else if b'a' <= ch && ch <= b'f' {
+        ch - b'a' + 10
+    } else {
+        ch - b'A' + 10
+    }
+}
+
+fn read_escaped_char(bytes: &[u8], pos: &mut usize) -> Result<u8, Error> {
+    if bytes[*pos] == b'\0' {
+        return Err(Error {
+            loc: *pos,
+            msg: "unexpected end of file".to_owned(),
+        });
     }
     if is_octdigit(bytes[*pos]) {
         let mut c = bytes[*pos] - b'0';
         *pos += 1;
-        if *pos < bytes.len() && is_octdigit(bytes[*pos]) {
+        if is_octdigit(bytes[*pos]) {
             c = c * 8 + (bytes[*pos] - b'0');
             *pos += 1;
-            if *pos < bytes.len() && is_octdigit(bytes[*pos]) {
+            if is_octdigit(bytes[*pos]) {
                 c = c * 8 + (bytes[*pos] - b'0');
                 *pos += 1;
             }
         }
-        Some(c)
+        Ok(c)
+    } else if bytes[*pos] == b'x' {
+        // Read a hexadecimal number.
+        *pos += 1;
+        if is_hexdigit(bytes[*pos]) {
+            let mut c = 0;
+            while is_hexdigit(bytes[*pos]) {
+                c = (c << 4) + from_hex(bytes[*pos]);
+                *pos += 1;
+            }
+            Ok(c)
+        } else {
+            Err(Error {
+                loc: *pos,
+                msg: "invalid hex escape sequence".to_owned(),
+            })
+        }
     } else if bytes[*pos] == b'a' {
         *pos += 1;
-        Some(7)
+        Ok(7)
     } else if bytes[*pos] == b'b' {
         *pos += 1;
-        Some(8)
+        Ok(8)
     } else if bytes[*pos] == b't' {
         *pos += 1;
-        Some(b'\t')
+        Ok(b'\t')
     } else if bytes[*pos] == b'n' {
         *pos += 1;
-        Some(b'\n')
+        Ok(b'\n')
     } else if bytes[*pos] == b'v' {
         *pos += 1;
-        Some(11)
+        Ok(11)
     } else if bytes[*pos] == b'f' {
         *pos += 1;
-        Some(12)
+        Ok(12)
     } else if bytes[*pos] == b'r' {
         *pos += 1;
-        Some(b'\r')
+        Ok(b'\r')
     } else if bytes[*pos] == b'e' {
         *pos += 1;
-        Some(27)
+        Ok(27)
     } else {
         let ch = bytes[*pos];
         *pos += 1;
-        Some(ch)
+        Ok(ch)
     }
 }
 
-fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<String, Error> {
-    let mut s = String::new();
-    while *pos < bytes.len() {
+fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<Vec<u8>, Error> {
+    let mut s = Vec::new();
+    while bytes[*pos] != b'\0' {
         if bytes[*pos] == b'"' {
             *pos += 1;
             return Ok(s);
@@ -205,14 +237,11 @@ fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<String, Error> {
         }
         if bytes[*pos] == b'\\' {
             *pos += 1;
-            if let Some(ch) = read_escaped_char(bytes, pos) {
-                s.push(ch as char);
-            } else {
-                break;
-            }
+            let ch = read_escaped_char(bytes, pos)?;
+            s.push(ch);
             continue;
         }
-        s.push(bytes[*pos] as char);
+        s.push(bytes[*pos]);
         *pos += 1;
     }
     Err(Error {
@@ -224,10 +253,10 @@ fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<String, Error> {
 pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
     let mut head = Token::new(TokenKind::Punct, 0, "");
     let mut cur = head.as_mut();
-    let bytes = text.as_bytes();
     let mut pos = 0;
 
-    while pos < bytes.len() {
+    let bytes = text.as_bytes();
+    while bytes[pos] != b'\0' {
         // Skip whitespace characters.
         if bytes[pos].is_ascii_whitespace() {
             pos += 1;
@@ -251,8 +280,8 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
         if bytes[pos] == b'"' {
             pos += 1;
             let loc = pos;
-            let s = read_string_literal(bytes, &mut pos)?;
-            let tok = Token::new(TokenKind::Str, loc, &s);
+            let bytes = read_string_literal(bytes, &mut pos)?;
+            let tok = Token::new(TokenKind::Str(bytes), loc, "");
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
             continue;
@@ -271,7 +300,7 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, Error> {
         // Identifier or keyword
         if is_ident1(bytes[pos]) {
             let loc = pos;
-            while pos < text.len() && is_ident2(bytes[pos]) {
+            while pos < bytes.len() && is_ident2(bytes[pos]) {
                 pos += 1;
             }
             let mut tok = Token::new(TokenKind::Ident, loc, &text[loc..pos]);

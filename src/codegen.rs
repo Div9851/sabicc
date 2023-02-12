@@ -105,8 +105,8 @@ fn emit_data(obj: &Obj, program: &Program) -> Result<(), Error> {
             println!(".data");
             println!(".globl {}", name);
             println!("{}:", name);
-            if let Some(text) = program.ctx.init_data.get(name) {
-                for b in text.as_bytes() {
+            if let Some(bytes) = program.ctx.init_data.get(name) {
+                for b in bytes {
                     println!("  .byte {}", b);
                 }
                 println!("  .byte 0");
