@@ -1,6 +1,6 @@
 use crate::{
     error::Error,
-    parse::{BinaryOp, Expr, ExprKind, Func, Stmt, StmtKind, Type, TypeKind, UnaryOp},
+    parse::{BinaryOp, Expr, ExprKind, Func, ObjKind, Stmt, StmtKind, Type, TypeKind, UnaryOp},
 };
 
 static ARGREG: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -27,7 +27,14 @@ fn pop(reg: &str) {
 // It's an error if a given node does not reside in memory.
 fn gen_addr(expr: &Expr) -> Result<(), Error> {
     if let ExprKind::Var(obj) = &expr.kind {
-        println!("  lea rax, [rbp-{}]", obj.offset);
+        match &obj.kind {
+            ObjKind::Local(offset) => {
+                println!("  lea rax, [rbp-{}]", offset);
+            }
+            ObjKind::Global(_) => {
+                panic!("not implemented");
+            }
+        }
         return Ok(());
     }
     if let ExprKind::Unary {
@@ -66,9 +73,13 @@ pub fn gen_func(func: &Func, ctx: &mut CodegenContext) -> Result<(), Error> {
     println!("  sub rsp, {}", align_to(func.stack_size, 16));
     let mut nargs = 0;
     for obj in &func.params {
-        println!("  lea rax, [rbp-{}]", obj.offset);
-        println!("  mov [rax], {}", ARGREG[nargs]);
-        nargs += 1;
+        if let ObjKind::Local(offset) = obj.kind {
+            println!("  lea rax, [rbp-{}]", offset);
+            println!("  mov [rax], {}", ARGREG[nargs]);
+            nargs += 1;
+        } else {
+            panic!("")
+        }
     }
     // Body
     gen_stmt(&func.body, ctx)?;

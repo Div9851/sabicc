@@ -6,6 +6,8 @@ use sabicc::tokenize;
 use std::env;
 use std::process;
 
+use std::collections::HashMap;
+
 fn handle_error(text: &str, err: Error) -> ! {
     eprintln!("{}", text);
     eprintln!("{}^ {}", " ".repeat(err.loc), err.msg);
@@ -27,9 +29,10 @@ fn main() {
     };
     let mut tok = head.as_ref();
     println!(".intel_syntax noprefix");
+    let mut globals = HashMap::new();
     let mut ctx = CodegenContext { label: 0 };
     while !tokenize::at_eof(tok) {
-        let f = match parse::func(&mut tok) {
+        let f = match parse::func(&mut tok, &mut globals) {
             Ok(f) => f,
             Err(err) => {
                 handle_error(text, err);

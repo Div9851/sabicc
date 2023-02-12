@@ -82,28 +82,45 @@ impl Type {
 }
 
 #[derive(Clone)]
-pub struct Obj {
-    pub offset: usize, // Offset from RBP
-    pub ty: Rc<Type>,  // Type
+pub enum ObjKind {
+    Local(usize),   // Offset from RBP
+    Global(String), // label
 }
 
-pub struct ParseContext {
+#[derive(Clone)]
+pub struct Obj {
+    pub kind: ObjKind,
+    pub ty: Rc<Type>,
+}
+
+pub struct ParseContext<'a> {
     pub locals: HashMap<String, Obj>,
+    pub globals: &'a mut HashMap<String, Obj>,
     pub stack_size: usize,
 }
 
-impl ParseContext {
-    pub fn new_lvar(&mut self, decl: Decl) -> Obj {
+impl<'a> ParseContext<'a> {
+    pub fn register_local(&mut self, decl: &Decl) -> Obj {
         self.stack_size += decl.ty.size;
         let obj = Obj {
-            offset: self.stack_size,
-            ty: decl.ty,
+            kind: ObjKind::Local(self.stack_size),
+            ty: Rc::clone(&decl.ty),
         };
-        self.locals.insert(decl.name, obj.clone());
+        self.locals.insert(decl.name.clone(), obj.clone());
         obj
     }
-    pub fn find_lvar(&mut self, name: &str) -> Option<Obj> {
+    pub fn register_global(&mut self, decl: &Decl) -> Obj {
+        let obj = Obj {
+            kind: ObjKind::Global(decl.name.clone()),
+            ty: Rc::clone(&decl.ty),
+        };
+        self.globals.insert(decl.name.clone(), obj.clone());
+        obj
+    }
+    pub fn find_var(&mut self, name: &str) -> Option<Obj> {
         if let Some(obj) = self.locals.get(name) {
+            Some(obj.clone())
+        } else if let Some(obj) = self.globals.get(name) {
             Some(obj.clone())
         } else {
             None
@@ -386,26 +403,28 @@ impl Expr {
     }
 }
 
-pub fn func(tok: &mut &Token) -> Result<Box<Func>, Error> {
+pub fn func(tok: &mut &Token, globals: &mut HashMap<String, Obj>) -> Result<Box<Func>, Error> {
     let loc = tok.loc;
     let ty = declspec(tok)?;
     let decl = declarator(tok, &ty)?;
     let mut ctx = ParseContext {
         locals: HashMap::new(),
+        globals,
         stack_size: 0,
     };
     match &decl.ty.kind {
         TypeKind::Func { params, return_ty } => {
-            let mut new_params = Vec::new();
+            ctx.register_global(&decl);
+            let mut objs = Vec::new();
             for param in params {
-                let obj = ctx.new_lvar(param.clone());
-                new_params.push(obj);
+                let obj = ctx.register_local(param);
+                objs.push(obj);
             }
             let body = compound_stmt(tok, &mut ctx)?;
             Ok(Box::new(Func {
                 name: decl.name,
                 return_ty: Rc::clone(return_ty),
-                params: new_params,
+                params: objs,
                 body,
                 stack_size: ctx.stack_size,
             }))
@@ -489,7 +508,7 @@ fn declaration(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Er
         }
         let loc = tok.loc;
         let decl = declarator(tok, &base_ty)?;
-        let obj = ctx.new_lvar(decl);
+        let obj = ctx.register_local(&decl);
         if tokenize::consume(tok, "=") {
             let lhs = Expr::new_var(obj, loc);
             let rhs = expr(tok, ctx)?;
@@ -808,7 +827,7 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Error>
             return funcall(ident, tok, ctx);
         }
         // Variable
-        if let Some(obj) = ctx.find_lvar(&ident.text) {
+        if let Some(obj) = ctx.find_var(&ident.text) {
             return Ok(Expr::new_var(obj, loc));
         } else {
             return Err(Error {
