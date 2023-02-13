@@ -80,6 +80,7 @@ fn load(ty: &Type) -> String {
 
 pub fn gen_program(program: &mut Program) -> Result<String> {
     let mut text = String::new();
+    text += &format!(".file 1 \"{}\"\n", program.ctx.filename);
     text += ".intel_syntax noprefix\n";
     let globals = program.ctx.scopes.first().unwrap();
     for (_, obj) in globals {
@@ -146,6 +147,7 @@ fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
 
 fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
     let mut text = String::new();
+    text += &format!("  .loc 1 {}\n", ctx.line_no[stmt.loc] + 1);
     match &stmt.kind {
         StmtKind::DeclStmt(stmt_vec) => {
             for stmt in stmt_vec {
@@ -224,6 +226,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
 // Generate text for a given node.
 fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
     let mut text = String::new();
+    text += &format!("  .loc 1 {}\n", ctx.line_no[expr.loc] + 1);
     match &expr.kind {
         ExprKind::StmtExpr(stmt_vec) => {
             for stmt in stmt_vec {

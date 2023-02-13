@@ -1,4 +1,4 @@
-SRCS=$(wildcard *.rs)
+SRCS=$(wildcard src/*.rs)
 
 TEST_SRCS=$(wildcard test/*.c)
 TESTS=$(TEST_SRCS:.c=.out)
