@@ -316,8 +316,8 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<B
     let loc = tok.loc;
     let decl = declarator(tok, base_ty, ctx)?;
     if let TypeKind::Func { params, return_ty } = &decl.ty.kind {
-        ctx.stack_size = 0;
         ctx.new_gvar(&decl);
+        ctx.stack_size = 0;
         ctx.enter_scope();
         let mut params_obj = Vec::new();
         for param in params {
@@ -325,7 +325,7 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<B
             params_obj.push(obj);
         }
         let body = compound_stmt(tok, ctx)?;
-        ctx.exit_scope();
+        ctx.leave_scope();
         Ok(Box::new(Func {
             name: decl.name,
             return_ty: Rc::clone(return_ty),
@@ -506,9 +506,11 @@ fn compound_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
     tokenize::expect(tok, "{", ctx)?;
     let mut block = Vec::new();
+    ctx.enter_scope();
     while !tokenize::consume(tok, "}") {
         block.push(stmt(tok, ctx)?);
     }
+    ctx.leave_scope();
     let stmt = Stmt {
         kind: StmtKind::CompoundStmt(block),
         loc,

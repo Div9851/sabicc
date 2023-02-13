@@ -120,7 +120,7 @@ impl Context {
     pub fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
     }
-    pub fn exit_scope(&mut self) {
+    pub fn leave_scope(&mut self) {
         self.scopes.pop();
     }
     pub fn new_lvar(&mut self, decl: &Decl) -> Obj {
