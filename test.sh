@@ -7,7 +7,7 @@ assert() {
     expected="$1"
     input="$2"
 
-    echo "$input" | $executable "-" > tmp.s || exit
+    echo "$input" | $executable -o tmp.s - || exit
     gcc -o tmp tmp.s tmp2.o
     ./tmp
     actual="$?"

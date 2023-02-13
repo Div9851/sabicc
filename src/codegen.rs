@@ -13,51 +13,54 @@ fn align_to(n: usize, align: usize) -> usize {
     (n + align - 1) / align * align
 }
 
-fn push() {
-    println!("  push rax");
+fn push() -> String {
+    "  push rax\n".to_owned()
 }
 
-fn pop(reg: &str) {
-    println!("  pop {}", reg);
+fn pop(reg: &str) -> String {
+    format!("  pop {}\n", reg)
 }
 
 // Store rax to an address that the stack top is pointing to.
-fn store(ty: &Type) {
-    pop("rdi");
+fn store(ty: &Type) -> String {
+    let mut text = String::new();
+    text += &pop("rdi");
 
     if ty.size == 1 {
-        println!("  mov [rdi], al");
+        text += "  mov [rdi], al\n";
     } else {
-        println!("  mov [rdi], rax");
+        text += "  mov [rdi], rax\n";
     }
+    text
 }
 
 // Compute the absolute address to a given node.
 // It's an error if a given node does not reside in memory.
-fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<()> {
+fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
+    let mut text = String::new();
     if let ExprKind::Var(obj) = &expr.kind {
         match &obj.kind {
             ObjKind::Local(offset) => {
-                println!("  lea rax, [rbp-{}]", offset);
+                text += &format!("  lea rax, [rbp-{}]\n", offset);
             }
             ObjKind::Global(name) => {
-                println!("  lea rax, {}[rip]", name);
+                text += &format!("  lea rax, {}[rip]\n", name);
             }
         }
-        return Ok(());
+        return Ok(text);
     }
     if let ExprKind::Unary {
         op: UnaryOp::DEREF,
         expr,
     } = &expr.kind
     {
-        gen_expr(expr, ctx)?;
-        return Ok(());
+        text += &gen_expr(expr, ctx)?;
+        return Ok(text);
     }
     bail!(error_message("not an lvalue", ctx, expr.loc));
 }
 
-fn load(ty: &Type) {
+fn load(ty: &Type) -> String {
     // If it is an array, do not attempt to load a value to the
     // register because in general we can't load an entire array to a
     // register. As a result, the result of an evaluation of an array
@@ -65,64 +68,67 @@ fn load(ty: &Type) {
     // This is where "array is automatically converted to a pointer to
     // the first element of the array in C" occurs.
     if let TypeKind::Array(_, _) = ty.kind {
-        return;
+        return "".to_owned();
     }
 
     if ty.size == 1 {
-        println!("  movsbq rax, [rax]");
+        "  movsbq rax, [rax]\n".to_owned()
     } else {
-        println!("  mov rax, [rax]");
+        "  mov rax, [rax]\n".to_owned()
     }
 }
 
-pub fn gen_program(program: &mut Program) -> Result<()> {
-    println!(".intel_syntax noprefix");
+pub fn gen_program(program: &mut Program) -> Result<String> {
+    let mut text = String::new();
+    text += ".intel_syntax noprefix\n";
     let globals = program.ctx.scopes.first().unwrap();
     for (_, obj) in globals {
-        emit_data(obj, &program.ctx)?;
+        text += &emit_data(obj, &program.ctx)?;
     }
     let funcs = &program.funcs;
     for func in funcs {
-        emit_text(func, &mut program.ctx)?;
+        text += &emit_text(func, &mut program.ctx)?;
     }
-    Ok(())
+    Ok(text)
 }
 
-fn emit_data(obj: &Obj, ctx: &Context) -> Result<()> {
+fn emit_data(obj: &Obj, ctx: &Context) -> Result<String> {
+    let mut text = String::new();
     if let ObjKind::Global(name) = &obj.kind {
         if !obj.ty.is_func() {
-            println!(".data");
-            println!(".globl {}", name);
-            println!("{}:", name);
+            text += ".data\n";
+            text += &format!(".globl {}\n", name);
+            text += &format!("{}:\n", name);
             if let Some(bytes) = ctx.init_data.get(name) {
                 for b in bytes {
-                    println!("  .byte {}", b);
+                    text += &format!("  .byte {}\n", b);
                 }
-                println!("  .byte 0");
+                text += "  .byte 0\n";
             } else {
-                println!("  .zero {}", obj.ty.size);
+                text += &format!("  .zero {}\n", obj.ty.size);
             }
         }
     }
-    Ok(())
+    Ok(text)
 }
 
-fn emit_text(func: &Func, ctx: &mut Context) -> Result<()> {
-    println!(".globl {}", func.name);
-    println!(".text");
-    println!("{}:", func.name);
+fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
+    let mut text = String::new();
+    text += &format!(".globl {}\n", func.name);
+    text += &format!(".text\n");
+    text += &format!("{}:\n", func.name);
     // Prologue
-    println!("  push rbp");
-    println!("  mov rbp, rsp");
-    println!("  sub rsp, {}", align_to(func.stack_size, 16));
+    text += "  push rbp\n";
+    text += "  mov rbp, rsp\n";
+    text += &format!("  sub rsp, {}\n", align_to(func.stack_size, 16));
     // Save passed-by-register arguments to the stack
     let mut nargs = 0;
     for obj in &func.params {
         if let ObjKind::Local(offset) = obj.kind {
             if obj.ty.size == 1 {
-                println!("  mov [rbp-{}], {}", offset, ARGREG8[nargs]);
+                text += &format!("  mov [rbp-{}], {}\n", offset, ARGREG8[nargs]);
             } else {
-                println!("  mov [rbp-{}], {}", offset, ARGREG64[nargs]);
+                text += &format!("  mov [rbp-{}], {}\n", offset, ARGREG64[nargs]);
             }
         } else {
             unreachable!();
@@ -130,53 +136,54 @@ fn emit_text(func: &Func, ctx: &mut Context) -> Result<()> {
         nargs += 1;
     }
     // Body
-    gen_stmt(&func.body, ctx)?;
+    text += &gen_stmt(&func.body, ctx)?;
     // Epilogue
-    println!("  mov rsp, rbp");
-    println!("  pop rbp");
-    println!("  ret");
-    Ok(())
+    text += "  mov rsp, rbp\n";
+    text += "  pop rbp\n";
+    text += "  ret\n";
+    Ok(text)
 }
 
-fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<()> {
+fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
+    let mut text = String::new();
     match &stmt.kind {
         StmtKind::DeclStmt(stmt_vec) => {
             for stmt in stmt_vec {
-                gen_stmt(stmt, ctx)?;
+                text += &gen_stmt(stmt, ctx)?;
             }
-            Ok(())
+            Ok(text)
         }
-        StmtKind::NullStmt => Ok(()),
+        StmtKind::NullStmt => Ok(text),
         StmtKind::ExprStmt(expr) => {
-            gen_expr(expr, ctx)?;
-            Ok(())
+            text += &gen_expr(expr, ctx)?;
+            Ok(text)
         }
         StmtKind::ReturnStmt(expr) => {
-            gen_expr(&expr, ctx)?;
-            println!("  mov rsp, rbp");
-            println!("  pop rbp");
-            println!("  ret");
-            Ok(())
+            text += &gen_expr(&expr, ctx)?;
+            text += "  mov rsp, rbp\n";
+            text += "  pop rbp\n";
+            text += "  ret\n";
+            Ok(text)
         }
         StmtKind::CompoundStmt(stmt_vec) => {
             for stmt in stmt_vec {
-                gen_stmt(stmt, ctx)?;
+                text += &gen_stmt(stmt, ctx)?;
             }
-            Ok(())
+            Ok(text)
         }
         StmtKind::IfStmt { cond, then, els } => {
-            gen_expr(&cond, ctx)?;
-            println!("  cmp rax, 0");
-            println!("  je .L.else.{}", ctx.id);
-            gen_stmt(then, ctx)?;
-            println!("  jmp .L.end.{}", ctx.id);
-            println!(".L.else.{}:", ctx.id);
+            text += &gen_expr(&cond, ctx)?;
+            text += "  cmp rax, 0\n";
+            text += &format!("  je .L.else.{}\n", ctx.id);
+            text += &gen_stmt(then, ctx)?;
+            text += &format!("  jmp .L.end.{}\n", ctx.id);
+            text += &format!(".L.else.{}:\n", ctx.id);
             if let Some(els) = els {
-                gen_stmt(els, ctx)?;
+                text += &gen_stmt(els, ctx)?;
             }
-            println!(".L.end.{}:", ctx.id);
+            text += &format!(".L.end.{}:\n", ctx.id);
             ctx.id += 1;
-            Ok(())
+            Ok(text)
         }
         StmtKind::ForStmt {
             init,
@@ -184,127 +191,128 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<()> {
             inc,
             body,
         } => {
-            gen_stmt(init, ctx)?;
-            println!(".L.begin.{}:", ctx.id);
+            text += &gen_stmt(init, ctx)?;
+            text += &format!(".L.begin.{}:\n", ctx.id);
             if let Some(cond) = cond {
-                gen_expr(cond, ctx)?;
-                println!("  cmp rax, 0");
-                println!("  je .L.end.{}", ctx.id);
+                text += &gen_expr(cond, ctx)?;
+                text += "  cmp rax, 0\n";
+                text += &format!("  je .L.end.{}\n", ctx.id);
             }
-            gen_stmt(body, ctx)?;
+            text += &gen_stmt(body, ctx)?;
             if let Some(inc) = inc {
-                gen_expr(inc, ctx)?;
+                text += &gen_expr(inc, ctx)?;
             }
-            println!("  jmp .L.begin.{}", ctx.id);
-            println!(".L.end.{}:", ctx.id);
+            text += &format!("  jmp .L.begin.{}\n", ctx.id);
+            text += &format!(".L.end.{}:\n", ctx.id);
             ctx.id += 1;
-            Ok(())
+            Ok(text)
         }
         StmtKind::WhileStmt { cond, body } => {
-            println!(".L.begin.{}:", ctx.id);
-            gen_expr(cond, ctx)?;
-            println!("  cmp rax, 0");
-            println!("  je .L.end.{}", ctx.id);
-            gen_stmt(body, ctx)?;
-            println!("  jmp .L.begin.{}", ctx.id);
-            println!(".L.end.{}:", ctx.id);
+            text += &format!(".L.begin.{}:\n", ctx.id);
+            text += &gen_expr(cond, ctx)?;
+            text += "  cmp rax, 0\n";
+            text += &format!("  je .L.end.{}\n", ctx.id);
+            text += &gen_stmt(body, ctx)?;
+            text += &format!("  jmp .L.begin.{}\n", ctx.id);
+            text += &format!(".L.end.{}:\n", ctx.id);
             ctx.id += 1;
-            Ok(())
+            Ok(text)
         }
     }
 }
 
-// Generate code for a given node.
-fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<()> {
+// Generate text for a given node.
+fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
+    let mut text = String::new();
     match &expr.kind {
         ExprKind::StmtExpr(stmt_vec) => {
             for stmt in stmt_vec {
-                gen_stmt(stmt, ctx)?;
+                text += &gen_stmt(stmt, ctx)?;
             }
         }
         ExprKind::Assign { lhs, rhs } => {
-            gen_addr(&lhs, ctx)?;
-            push();
-            gen_expr(&rhs, ctx)?;
-            store(&expr.ty);
+            text += &gen_addr(&lhs, ctx)?;
+            text += &push();
+            text += &gen_expr(&rhs, ctx)?;
+            text += &store(&expr.ty);
         }
         ExprKind::Binary { op, lhs, rhs } => {
-            gen_expr(&rhs, ctx)?;
-            push();
-            gen_expr(&lhs, ctx)?;
-            pop("rdi");
+            text += &gen_expr(&rhs, ctx)?;
+            text += &push();
+            text += &gen_expr(&lhs, ctx)?;
+            text += &pop("rdi");
             match op {
                 BinaryOp::ADD => {
-                    println!("  add rax, rdi");
+                    text += "  add rax, rdi\n";
                 }
                 BinaryOp::SUB => {
-                    println!("  sub rax, rdi");
+                    text += "  sub rax, rdi\n";
                 }
                 BinaryOp::MUL => {
-                    println!("  imul rax, rdi");
+                    text += "  imul rax, rdi\n";
                 }
                 BinaryOp::DIV => {
-                    println!("  cqo");
-                    println!("  idiv rdi");
+                    text += "  cqo\n";
+                    text += "  idiv rdi\n";
                 }
                 BinaryOp::EQ => {
-                    println!("  cmp rax, rdi");
-                    println!("  sete al");
-                    println!("  movzb rax, al");
+                    text += "  cmp rax, rdi\n";
+                    text += "  sete al\n";
+                    text += "  movzb rax, al\n";
                 }
                 BinaryOp::NE => {
-                    println!("  cmp rax, rdi");
-                    println!("  setne al");
-                    println!("  movzb rax, al");
+                    text += "  cmp rax, rdi\n";
+                    text += "  setne al\n";
+                    text += "  movzb rax, al\n";
                 }
                 BinaryOp::LT => {
-                    println!("  cmp rax, rdi");
-                    println!("  setl al");
-                    println!("  movzb rax, al");
+                    text += "  cmp rax, rdi\n";
+                    text += "  setl al\n";
+                    text += "  movzb rax, al\n";
                 }
                 BinaryOp::LE => {
-                    println!("  cmp rax, rdi");
-                    println!("  setle al");
-                    println!("  movzb rax, al");
+                    text += "  cmp rax, rdi\n";
+                    text += "  setle al\n";
+                    text += "  movzb rax, al\n";
                 }
             };
         }
         ExprKind::Unary { op, expr: operand } => {
             match op {
                 UnaryOp::NEG => {
-                    gen_expr(&operand, ctx)?;
-                    println!("  neg rax");
+                    text += &gen_expr(&operand, ctx)?;
+                    text += "  neg rax\n";
                 }
                 UnaryOp::DEREF => {
-                    gen_expr(&operand, ctx)?;
-                    load(&expr.ty);
+                    text += &gen_expr(&operand, ctx)?;
+                    text += &load(&expr.ty);
                 }
                 UnaryOp::ADDR => {
-                    gen_addr(&operand, ctx)?;
+                    text += &gen_addr(&operand, ctx)?;
                 }
             };
         }
         ExprKind::Var(_) => {
-            gen_addr(expr, ctx)?;
-            load(&expr.ty);
+            text += &gen_addr(expr, ctx)?;
+            text += &load(&expr.ty);
         }
         ExprKind::Num(val) => {
-            println!("  mov rax, {}", val);
+            text += &format!("  mov rax, {}\n", val);
         }
         ExprKind::FunCall { name, args } => {
             let argreg = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
             let mut nargs = 0;
             for arg in args {
-                gen_expr(arg, ctx)?;
-                push();
+                text += &gen_expr(arg, ctx)?;
+                text += &push();
                 nargs += 1;
             }
             for i in (0..nargs).rev() {
-                pop(argreg[i]);
+                text += &pop(argreg[i]);
             }
             // todo: RSP must be align to 16
-            println!("  call {}", name);
+            text += &format!("  call {}\n", name);
         }
     };
-    Ok(())
+    Ok(text)
 }
