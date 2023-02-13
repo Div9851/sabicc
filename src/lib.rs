@@ -101,6 +101,10 @@ impl Type {
 
 pub struct Context {
     pub text: String,
+    pub filename: String,
+    pub line_no: Vec<usize>,
+    pub line_start_pos: Vec<usize>,
+    pub line_end_pos: Vec<usize>,
     pub scopes: Vec<HashMap<String, Obj>>,
     pub init_data: HashMap<String, Vec<u8>>,
     pub id: usize,
@@ -108,9 +112,28 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(text: String) -> Context {
+    pub fn new(text: String, filename: String) -> Context {
+        let mut line_no = vec![0; text.len()];
+        let mut line_start_pos = Vec::new();
+        let mut line_end_pos = Vec::new();
+        let mut cur_line_no = 0;
+        for (pos, ch) in text.bytes().enumerate() {
+            line_no[pos] = cur_line_no;
+            if line_start_pos.len() <= cur_line_no {
+                line_start_pos.push(pos);
+            }
+            if ch == b'\n' {
+                line_end_pos.push(pos);
+                cur_line_no += 1;
+            }
+        }
+        line_end_pos.push(text.len());
         Context {
             text,
+            filename,
+            line_no,
+            line_start_pos,
+            line_end_pos,
             scopes: Vec::new(),
             init_data: HashMap::new(),
             id: 0,
@@ -171,6 +194,20 @@ impl Context {
     }
 }
 
-fn error_message(msg: &str, ctx: &Context, loc: usize) -> String {
-    format!("\n{}{}^ {}", ctx.text, " ".repeat(loc), msg)
+//
+// foo.c:10: x = y + 1;
+//               ^ <error message here>
+fn error_message(msg: &str, ctx: &Context, pos: usize) -> String {
+    let filename = &ctx.filename;
+    let line_no = ctx.line_no[pos];
+    let line_start_pos = ctx.line_start_pos[line_no];
+    let line_end_pos = ctx.line_end_pos[line_no];
+    let info = format!("{}:{}: ", filename, line_no + 1);
+    format!(
+        "\n{}{}\n{}^ {}",
+        info,
+        &ctx.text[line_start_pos..line_end_pos],
+        " ".repeat(info.len() + pos - line_start_pos),
+        msg
+    )
 }

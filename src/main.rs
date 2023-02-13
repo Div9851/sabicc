@@ -78,7 +78,7 @@ fn parse_args(mut args: Args) -> Result<Config> {
 fn main() -> Result<()> {
     let config = parse_args(env::args())?;
     let text = read_file(&config.input_path)?;
-    let mut program = parse::program(text)?;
+    let mut program = parse::program(text, &config.input_path)?;
     write_file(
         config.output_path.as_deref(),
         &codegen::gen_program(&mut program)?,

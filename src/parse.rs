@@ -11,9 +11,9 @@ pub struct Program {
 }
 
 impl Program {
-    fn new(text: String) -> Program {
+    fn new(text: String, filename: String) -> Program {
         let funcs = Vec::new();
-        let ctx = Context::new(text);
+        let ctx = Context::new(text, filename);
         Program { funcs, ctx }
     }
 }
@@ -279,8 +279,8 @@ impl Expr {
     }
 }
 
-pub fn program(text: String) -> Result<Program> {
-    let mut program = Program::new(text);
+pub fn program(text: String, filename: &str) -> Result<Program> {
+    let mut program = Program::new(text, filename.to_owned());
     let head = tokenize::tokenize(&program.ctx.text, &program.ctx)?;
     let mut tok = head.as_ref();
     program.ctx.enter_scope();
