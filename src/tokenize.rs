@@ -1,5 +1,4 @@
 use crate::{error_message, Context};
-
 use anyhow::{bail, Result};
 
 pub enum TokenKind {
@@ -244,6 +243,29 @@ pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
 
     let bytes = text.as_bytes();
     while bytes[pos] != b'\0' {
+        // Skip line comments.
+        if bytes[pos..].starts_with(b"//") {
+            pos += 2;
+            while bytes[pos] != b'\n' && bytes[pos] != b'\0' {
+                pos += 1;
+            }
+            continue;
+        }
+
+        // Skip block comments.
+        if bytes[pos..].starts_with(b"/*") {
+            let loc = pos;
+            pos += 2;
+            while !bytes[pos..].starts_with(b"*/") && bytes[pos] != b'\0' {
+                pos += 1;
+            }
+            if bytes[pos] == b'\0' {
+                bail!(error_message("unclosed block comment", ctx, loc));
+            }
+            pos += 2;
+            continue;
+        }
+
         // Skip whitespace characters.
         if bytes[pos].is_ascii_whitespace() {
             pos += 1;
