@@ -1,10 +1,7 @@
-use crate::{
-    error::CompileError,
-    parse::{
-        BinaryOp, Expr, ExprKind, Func, Obj, ObjKind, Program, Stmt, StmtKind, Type, TypeKind,
-        UnaryOp,
-    },
-};
+use crate::parse::{BinaryOp, Expr, ExprKind, Func, Program, Stmt, StmtKind, UnaryOp};
+use crate::{error_message, Context, Obj, ObjKind, Type, TypeKind};
+
+use anyhow::{bail, Result};
 use std::unreachable;
 
 static ARGREG64: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -37,7 +34,7 @@ fn store(ty: &Type) {
 
 // Compute the absolute address to a given node.
 // It's an error if a given node does not reside in memory.
-fn gen_addr(expr: &Expr, ctx: &mut CodegenContext) -> Result<(), CompileError> {
+fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<()> {
     if let ExprKind::Var(obj) = &expr.kind {
         match &obj.kind {
             ObjKind::Local(offset) => {
@@ -57,10 +54,7 @@ fn gen_addr(expr: &Expr, ctx: &mut CodegenContext) -> Result<(), CompileError> {
         gen_expr(expr, ctx)?;
         return Ok(());
     }
-    Err(CompileError {
-        loc: expr.loc,
-        msg: "not an lvalue".to_owned(),
-    })
+    bail!(error_message("not an lvalue", ctx, expr.loc));
 }
 
 fn load(ty: &Type) {
@@ -81,31 +75,26 @@ fn load(ty: &Type) {
     }
 }
 
-pub struct CodegenContext {
-    pub id: usize,
-}
-
-pub fn gen_program(program: &Program) -> Result<(), CompileError> {
+pub fn gen_program(program: &mut Program) -> Result<()> {
     println!(".intel_syntax noprefix");
     let globals = program.ctx.scopes.first().unwrap();
     for (_, obj) in globals {
-        emit_data(obj, program)?;
+        emit_data(obj, &program.ctx)?;
     }
-    let mut ctx = CodegenContext { id: 0 };
     let funcs = &program.funcs;
-    for f in funcs {
-        emit_text(f, &mut ctx)?;
+    for func in funcs {
+        emit_text(func, &mut program.ctx)?;
     }
     Ok(())
 }
 
-fn emit_data(obj: &Obj, program: &Program) -> Result<(), CompileError> {
+fn emit_data(obj: &Obj, ctx: &Context) -> Result<()> {
     if let ObjKind::Global(name) = &obj.kind {
         if !obj.ty.is_func() {
             println!(".data");
             println!(".globl {}", name);
             println!("{}:", name);
-            if let Some(bytes) = program.ctx.init_data.get(name) {
+            if let Some(bytes) = ctx.init_data.get(name) {
                 for b in bytes {
                     println!("  .byte {}", b);
                 }
@@ -118,7 +107,7 @@ fn emit_data(obj: &Obj, program: &Program) -> Result<(), CompileError> {
     Ok(())
 }
 
-fn emit_text(func: &Func, ctx: &mut CodegenContext) -> Result<(), CompileError> {
+fn emit_text(func: &Func, ctx: &mut Context) -> Result<()> {
     println!(".globl {}", func.name);
     println!(".text");
     println!("{}:", func.name);
@@ -149,7 +138,7 @@ fn emit_text(func: &Func, ctx: &mut CodegenContext) -> Result<(), CompileError> 
     Ok(())
 }
 
-fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), CompileError> {
+fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<()> {
     match &stmt.kind {
         StmtKind::DeclStmt(stmt_vec) => {
             for stmt in stmt_vec {
@@ -226,7 +215,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut CodegenContext) -> Result<(), CompileError> {
 }
 
 // Generate code for a given node.
-fn gen_expr(expr: &Expr, ctx: &mut CodegenContext) -> Result<(), CompileError> {
+fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<()> {
     match &expr.kind {
         ExprKind::StmtExpr(stmt_vec) => {
             for stmt in stmt_vec {

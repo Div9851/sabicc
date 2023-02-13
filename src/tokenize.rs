@@ -1,6 +1,7 @@
-use crate::error::CompileError;
+use crate::{error_message, Context};
 
-#[derive(Debug, PartialEq, Eq)]
+use anyhow::{bail, Result};
+
 pub enum TokenKind {
     Ident,        // Identifiers
     Punct,        // Punctuators
@@ -15,7 +16,7 @@ pub struct Token {
     pub kind: TokenKind,          // Token kind
     pub next: Option<Box<Token>>, // Next token
     pub loc: usize,               // Token location
-    pub text: String,             // Token bytes
+    pub text: String,             // Token text
 }
 
 impl Token {
@@ -38,11 +39,11 @@ pub fn at_eof(tok: &Token) -> bool {
 }
 
 pub fn equal(tok: &Token, op: &str) -> bool {
-    (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op
+    matches!(tok.kind, TokenKind::Punct | TokenKind::Keyword) && tok.text == op
 }
 
 pub fn consume(tok: &mut &Token, op: &str) -> bool {
-    if (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op {
+    if equal(tok, op) {
         *tok = tok.next.as_ref().unwrap();
         true
     } else {
@@ -50,27 +51,22 @@ pub fn consume(tok: &mut &Token, op: &str) -> bool {
     }
 }
 
-pub fn expect(tok: &mut &Token, op: &str) -> Result<(), CompileError> {
-    if (tok.kind == TokenKind::Punct || tok.kind == TokenKind::Keyword) && tok.text == op {
+pub fn expect(tok: &mut &Token, op: &str, ctx: &Context) -> Result<()> {
+    if equal(tok, op) {
         *tok = tok.next.as_ref().unwrap();
         Ok(())
     } else {
-        Err(CompileError {
-            loc: tok.loc,
-            msg: format!("'{}' expected, got '{}'", op, tok.text),
-        })
+        let msg = format!("'{}' expected", op);
+        bail!(error_message(&msg, ctx, tok.loc));
     }
 }
 
-pub fn expect_number(tok: &mut &Token) -> Result<i32, CompileError> {
+pub fn expect_number(tok: &mut &Token, ctx: &Context) -> Result<i32> {
     if let TokenKind::Num(val) = tok.kind {
         *tok = tok.next.as_ref().unwrap();
         Ok(val)
     } else {
-        Err(CompileError {
-            loc: tok.loc,
-            msg: "expected a number".to_owned(),
-        })
+        bail!(error_message("expected a number", ctx, tok.loc));
     }
 }
 
@@ -83,11 +79,11 @@ pub fn consume_number(tok: &mut &Token) -> Option<i32> {
     }
 }
 
-pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a Token> {
-    if tok.kind == TokenKind::Ident {
-        let ident = *tok;
+pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a str> {
+    if matches!(tok.kind, TokenKind::Ident) {
+        let text = &tok.text;
         *tok = tok.next.as_ref().unwrap();
-        Some(ident)
+        Some(text)
     } else {
         None
     }
@@ -159,12 +155,9 @@ fn from_hex(ch: u8) -> u8 {
     }
 }
 
-fn read_escaped_char(bytes: &[u8], pos: &mut usize) -> Result<u8, CompileError> {
+fn read_escaped_char(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<u8> {
     if bytes[*pos] == b'\0' {
-        return Err(CompileError {
-            loc: *pos,
-            msg: "unexpected end of file".to_owned(),
-        });
+        bail!(error_message("unexpected end of file", ctx, *pos));
     }
     if is_octdigit(bytes[*pos]) {
         let mut c = bytes[*pos] - b'0';
@@ -189,10 +182,7 @@ fn read_escaped_char(bytes: &[u8], pos: &mut usize) -> Result<u8, CompileError> 
             }
             Ok(c)
         } else {
-            Err(CompileError {
-                loc: *pos,
-                msg: "invalid hex escape sequence".to_owned(),
-            })
+            bail!(error_message("invalid hex escape sequence", ctx, *pos));
         }
     } else if bytes[*pos] == b'a' {
         *pos += 1;
@@ -225,7 +215,7 @@ fn read_escaped_char(bytes: &[u8], pos: &mut usize) -> Result<u8, CompileError> 
     }
 }
 
-fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<Vec<u8>, CompileError> {
+fn read_string_literal(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<Vec<u8>> {
     let mut s = Vec::new();
     while bytes[*pos] != b'\0' {
         if bytes[*pos] == b'"' {
@@ -237,20 +227,17 @@ fn read_string_literal(bytes: &[u8], pos: &mut usize) -> Result<Vec<u8>, Compile
         }
         if bytes[*pos] == b'\\' {
             *pos += 1;
-            let ch = read_escaped_char(bytes, pos)?;
+            let ch = read_escaped_char(bytes, pos, ctx)?;
             s.push(ch);
             continue;
         }
         s.push(bytes[*pos]);
         *pos += 1;
     }
-    Err(CompileError {
-        loc: *pos,
-        msg: "unclosed string literal".to_owned(),
-    })
+    bail!(error_message("unclosed string literal", ctx, *pos));
 }
 
-pub fn tokenize(text: &str) -> Result<Box<Token>, CompileError> {
+pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
     let mut head = Token::new(TokenKind::Punct, 0, "");
     let mut cur = head.as_mut();
     let mut pos = 0;
@@ -280,7 +267,7 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, CompileError> {
         if bytes[pos] == b'"' {
             pos += 1;
             let loc = pos;
-            let bytes = read_string_literal(bytes, &mut pos)?;
+            let bytes = read_string_literal(bytes, &mut pos, ctx)?;
             let tok = Token::new(TokenKind::Str(bytes), loc, "");
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
@@ -310,10 +297,7 @@ pub fn tokenize(text: &str) -> Result<Box<Token>, CompileError> {
             continue;
         }
 
-        return Err(CompileError {
-            loc: pos,
-            msg: "invalid token".to_owned(),
-        });
+        bail!(error_message("invalid token", ctx, pos));
     }
     cur.next = Some(Token::new(TokenKind::EOF, pos, ""));
 

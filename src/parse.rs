@@ -1,183 +1,19 @@
-use std::collections::HashMap;
+use anyhow::{bail, Result};
 use std::mem;
 use std::rc::Rc;
 
-use crate::error::CompileError;
 use crate::tokenize::{self, Token, TokenKind};
-
-pub enum TypeKind {
-    Int,
-    Char,
-    Ptr(Rc<Type>),
-    Array(Rc<Type>, usize),
-    Func {
-        params: Vec<Decl>,
-        return_ty: Rc<Type>,
-    },
-}
-
-pub struct Type {
-    pub kind: TypeKind,
-    pub size: usize,
-}
-
-impl Type {
-    fn new_int() -> Rc<Type> {
-        Rc::new(Type {
-            kind: TypeKind::Int,
-            size: 8,
-        })
-    }
-    fn new_char() -> Rc<Type> {
-        Rc::new(Type {
-            kind: TypeKind::Char,
-            size: 1,
-        })
-    }
-    fn new_str(len: usize) -> Rc<Type> {
-        Type::new_array(&Type::new_char(), len)
-    }
-    fn new_ptr(base_ty: &Rc<Type>) -> Rc<Type> {
-        Rc::new(Type {
-            kind: TypeKind::Ptr(Rc::clone(base_ty)),
-            size: 8,
-        })
-    }
-    fn new_array(base_ty: &Rc<Type>, len: usize) -> Rc<Type> {
-        Rc::new(Type {
-            kind: TypeKind::Array(Rc::clone(base_ty), len),
-            size: base_ty.size * len,
-        })
-    }
-    fn new_func(params: Vec<Decl>, return_ty: &Rc<Type>) -> Rc<Type> {
-        Rc::new(Type {
-            kind: TypeKind::Func {
-                params,
-                return_ty: Rc::clone(return_ty),
-            },
-            size: 0,
-        })
-    }
-    pub fn is_integer(&self) -> bool {
-        match self.kind {
-            TypeKind::Int | TypeKind::Char => true,
-            _ => false,
-        }
-    }
-    pub fn is_ptr(&self) -> bool {
-        match self.kind {
-            TypeKind::Ptr(_) | TypeKind::Array(_, _) => true,
-            _ => false,
-        }
-    }
-    pub fn is_func(&self) -> bool {
-        match self.kind {
-            TypeKind::Func {
-                params: _,
-                return_ty: _,
-            } => true,
-            _ => false,
-        }
-    }
-    pub fn get_base_ty(&self) -> &Rc<Type> {
-        match &self.kind {
-            TypeKind::Ptr(base_ty) | TypeKind::Array(base_ty, _) => base_ty,
-            _ => panic!("try to get base_ty of a non pointer type"),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub enum ObjKind {
-    Local(usize),   // Offset from RBP
-    Global(String), // label
-}
-
-#[derive(Clone)]
-pub struct Obj {
-    pub kind: ObjKind,
-    pub ty: Rc<Type>,
-}
-
-pub struct ParseContext {
-    pub scopes: Vec<HashMap<String, Obj>>,
-    pub init_data: HashMap<String, Vec<u8>>,
-    pub id: usize,
-    pub stack_size: usize,
-}
-
-impl ParseContext {
-    pub fn new() -> ParseContext {
-        ParseContext {
-            scopes: Vec::new(),
-            init_data: HashMap::new(),
-            id: 0,
-            stack_size: 0,
-        }
-    }
-    pub fn enter_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-    }
-    pub fn exit_scope(&mut self) {
-        self.scopes.pop();
-    }
-    pub fn new_lvar(&mut self, decl: &Decl) -> Obj {
-        self.stack_size += decl.ty.size;
-        let obj = Obj {
-            kind: ObjKind::Local(self.stack_size),
-            ty: Rc::clone(&decl.ty),
-        };
-        self.scopes
-            .last_mut()
-            .unwrap()
-            .insert(decl.name.clone(), obj.clone());
-        obj
-    }
-    fn new_gvar(&mut self, decl: &Decl) -> Obj {
-        let obj = Obj {
-            kind: ObjKind::Global(decl.name.clone()),
-            ty: Rc::clone(&decl.ty),
-        };
-        self.scopes
-            .first_mut()
-            .unwrap()
-            .insert(decl.name.clone(), obj.clone());
-        obj
-    }
-    fn new_unique_name(&mut self) -> String {
-        let name = format!(".L..{}", self.id);
-        self.id += 1;
-        name
-    }
-    fn new_str(&mut self, bytes: Vec<u8>) -> Obj {
-        let name = self.new_unique_name();
-        let decl = Decl {
-            name: name.clone(),
-            ty: Type::new_str(bytes.len() + 1),
-        };
-        let obj = self.new_gvar(&decl);
-        self.init_data.insert(name, bytes);
-        obj
-    }
-    pub fn find_var(&mut self, name: &str) -> Option<Obj> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(obj) = scope.get(name) {
-                return Some(obj.clone());
-            }
-        }
-        None
-    }
-}
+use crate::{error_message, Context, Decl, Obj, Type, TypeKind};
 
 pub struct Program {
     pub funcs: Vec<Box<Func>>,
-    pub ctx: ParseContext,
+    pub ctx: Context,
 }
 
 impl Program {
-    fn new() -> Program {
+    fn new(text: String) -> Program {
         let funcs = Vec::new();
-        let ctx = ParseContext::new();
+        let ctx = Context::new(text);
         Program { funcs, ctx }
     }
 }
@@ -188,12 +24,6 @@ pub struct Func {
     pub params: Vec<Obj>,
     pub body: Box<Stmt>,
     pub stack_size: usize,
-}
-
-#[derive(Clone)]
-pub struct Decl {
-    pub name: String,
-    pub ty: Rc<Type>,
 }
 
 pub enum StmtKind {
@@ -285,11 +115,12 @@ impl Expr {
         op: BinaryOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+        ctx: &Context,
         loc: usize,
-    ) -> Result<Box<Expr>, CompileError> {
+    ) -> Result<Box<Expr>> {
         match op {
-            BinaryOp::ADD => Expr::new_add(lhs, rhs, loc),
-            BinaryOp::SUB => Expr::new_sub(lhs, rhs, loc),
+            BinaryOp::ADD => Expr::new_add(lhs, rhs, ctx, loc),
+            BinaryOp::SUB => Expr::new_sub(lhs, rhs, ctx, loc),
             BinaryOp::MUL | BinaryOp::DIV => {
                 if lhs.ty.is_integer() && rhs.ty.is_integer() {
                     let expr = Expr {
@@ -299,10 +130,7 @@ impl Expr {
                     };
                     Ok(Box::new(expr))
                 } else {
-                    Err(CompileError {
-                        loc,
-                        msg: "invalid operands".to_owned(),
-                    })
+                    panic!("invalid operands");
                 }
             }
             BinaryOp::EQ | BinaryOp::NE | BinaryOp::LT | BinaryOp::LE => {
@@ -319,8 +147,9 @@ impl Expr {
     fn new_add(
         mut lhs: Box<Expr>,
         mut rhs: Box<Expr>,
+        ctx: &Context,
         loc: usize,
-    ) -> Result<Box<Expr>, CompileError> {
+    ) -> Result<Box<Expr>> {
         if lhs.ty.is_integer() && rhs.ty.is_ptr() {
             mem::swap(&mut lhs, &mut rhs);
         }
@@ -334,15 +163,13 @@ impl Expr {
                 BinaryOp::MUL,
                 rhs,
                 Expr::new_num(lhs.ty.get_base_ty().size as i32, loc),
+                ctx,
                 loc,
             )?;
             result_ty = Rc::clone(&lhs.ty);
         } else {
             // `ptr + ptr`
-            return Err(CompileError {
-                loc,
-                msg: "invalid operands".to_owned(),
-            });
+            bail!(error_message("invalid operands", ctx, loc));
         }
         Ok(Box::new(Expr {
             kind: ExprKind::Binary {
@@ -355,7 +182,7 @@ impl Expr {
         }))
     }
 
-    fn new_sub(lhs: Box<Expr>, mut rhs: Box<Expr>, loc: usize) -> Result<Box<Expr>, CompileError> {
+    fn new_sub(lhs: Box<Expr>, mut rhs: Box<Expr>, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
         let result_ty;
         let mut div = 1;
         if lhs.ty.is_integer() && rhs.ty.is_integer() {
@@ -367,15 +194,13 @@ impl Expr {
                 BinaryOp::MUL,
                 rhs,
                 Expr::new_num(lhs.ty.get_base_ty().size as i32, loc),
+                ctx,
                 loc,
             )?;
             result_ty = Rc::clone(&lhs.ty);
         } else if lhs.ty.is_integer() && rhs.ty.is_ptr() {
             // `int - ptr`
-            return Err(CompileError {
-                loc,
-                msg: "invalid operands".to_owned(),
-            });
+            bail!(error_message("invalid operands", ctx, loc));
         } else {
             // `ptr - ptr`
             // todo: type check
@@ -392,32 +217,26 @@ impl Expr {
             loc,
         });
         if div > 1 {
-            expr = Expr::new_binary(BinaryOp::DIV, expr, Expr::new_num(div, loc), loc)?;
+            expr = Expr::new_binary(BinaryOp::DIV, expr, Expr::new_num(div, loc), ctx, loc)?;
         }
         Ok(expr)
     }
 
-    fn new_unary(op: UnaryOp, expr: Box<Expr>, loc: usize) -> Result<Box<Expr>, CompileError> {
+    fn new_unary(op: UnaryOp, expr: Box<Expr>, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
         let result_ty;
         match op {
             UnaryOp::NEG => {
                 if expr.ty.is_integer() {
                     result_ty = Type::new_int();
                 } else {
-                    return Err(CompileError {
-                        loc,
-                        msg: "invalid operand".to_owned(),
-                    });
+                    bail!(error_message("invalid operand", ctx, loc));
                 }
             }
             UnaryOp::DEREF => {
                 if expr.ty.is_ptr() {
                     result_ty = Rc::clone(expr.ty.get_base_ty());
                 } else {
-                    return Err(CompileError {
-                        loc,
-                        msg: "invalid operand".to_owned(),
-                    });
+                    bail!(error_message("invalid operand", ctx, loc));
                 }
             }
             UnaryOp::ADDR => {
@@ -430,6 +249,7 @@ impl Expr {
             loc,
         }))
     }
+
     fn new_var(obj: Obj, loc: usize) -> Box<Expr> {
         let ty = Rc::clone(&obj.ty);
         Box::new(Expr {
@@ -438,6 +258,7 @@ impl Expr {
             loc,
         })
     }
+
     fn new_num(val: i32, loc: usize) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::Num(val),
@@ -445,6 +266,7 @@ impl Expr {
             loc,
         })
     }
+
     fn new_funcall(name: &str, args: Vec<Box<Expr>>, loc: usize) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::FunCall {
@@ -457,46 +279,42 @@ impl Expr {
     }
 }
 
-pub fn program(tok: &mut &Token) -> Result<Program, CompileError> {
-    let mut program = Program::new();
+pub fn program(text: String) -> Result<Program> {
+    let mut program = Program::new(text);
+    let head = tokenize::tokenize(&program.ctx.text, &program.ctx)?;
+    let mut tok = head.as_ref();
     program.ctx.enter_scope();
     while !tokenize::at_eof(tok) {
-        let base_ty = declspec(tok)?;
+        let base_ty = declspec(&mut tok, &program.ctx)?;
         // Function
-        if is_func(tok) {
-            program.funcs.push(func(tok, &base_ty, &mut program.ctx)?);
+        if is_func(&mut tok, &mut program.ctx) {
+            program
+                .funcs
+                .push(func(&mut tok, &base_ty, &mut program.ctx)?);
             continue;
         }
         // Global variable
-        global_variable(tok, &base_ty, &mut program.ctx)?;
+        global_variable(&mut tok, &base_ty, &mut program.ctx)?;
     }
     Ok(program)
 }
 
-fn global_variable(
-    tok: &mut &Token,
-    base_ty: &Rc<Type>,
-    ctx: &mut ParseContext,
-) -> Result<(), CompileError> {
+fn global_variable(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<()> {
     let mut first = true;
     while !tokenize::consume(tok, ";") {
         if !first {
-            tokenize::expect(tok, ",")?;
+            tokenize::expect(tok, ",", ctx)?;
         }
         first = false;
-        let decl = declarator(tok, base_ty)?;
+        let decl = declarator(tok, base_ty, ctx)?;
         ctx.new_gvar(&decl);
     }
     Ok(())
 }
 
-pub fn func(
-    tok: &mut &Token,
-    base_ty: &Rc<Type>,
-    ctx: &mut ParseContext,
-) -> Result<Box<Func>, CompileError> {
+pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<Box<Func>> {
     let loc = tok.loc;
-    let decl = declarator(tok, base_ty)?;
+    let decl = declarator(tok, base_ty, ctx)?;
     if let TypeKind::Func { params, return_ty } = &decl.ty.kind {
         ctx.stack_size = 0;
         ctx.new_gvar(&decl);
@@ -516,22 +334,19 @@ pub fn func(
             stack_size: ctx.stack_size,
         }))
     } else {
-        Err(CompileError {
-            loc,
-            msg: "expected a function".to_owned(),
-        })
+        bail!(error_message("expected a function", ctx, loc));
     }
 }
 
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition or declaration.
-fn is_func(tok: &mut &Token) -> bool {
+fn is_func(tok: &mut &Token, ctx: &Context) -> bool {
     if tokenize::equal(tok, ";") {
         return false;
     }
     let cur = *tok;
     let dummy = Rc::new(Type::new_int());
-    let result = declarator(tok, &dummy);
+    let result = declarator(tok, &dummy, ctx);
     *tok = cur;
     match result {
         Ok(decl) => decl.ty.is_func(),
@@ -545,25 +360,25 @@ fn is_typename(tok: &Token) -> bool {
 }
 
 // declspec = "char" | "int"
-fn declspec(tok: &mut &Token) -> Result<Rc<Type>, CompileError> {
+fn declspec(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
     if tokenize::consume(tok, "char") {
         return Ok(Type::new_char());
     }
-    tokenize::expect(tok, "int")?;
+    tokenize::expect(tok, "int", ctx)?;
     Ok(Type::new_int())
 }
 
 // func-params = "(" (param ("," param)*)? ")"
 // param       = declspec declarator
-fn func_params(tok: &mut &Token) -> Result<Vec<Decl>, CompileError> {
-    tokenize::expect(tok, "(")?;
+fn func_params(tok: &mut &Token, ctx: &Context) -> Result<Vec<Decl>> {
+    tokenize::expect(tok, "(", ctx)?;
     let mut params = Vec::new();
     while !tokenize::consume(tok, ")") {
         if params.len() > 0 {
-            tokenize::expect(tok, ",")?;
+            tokenize::expect(tok, ",", ctx)?;
         }
-        let param_base_ty = declspec(tok)?;
-        let param = declarator(tok, &param_base_ty)?;
+        let param_base_ty = declspec(tok, ctx)?;
+        let param = declarator(tok, &param_base_ty, ctx)?;
         params.push(param);
     }
     Ok(params)
@@ -572,15 +387,15 @@ fn func_params(tok: &mut &Token) -> Result<Vec<Decl>, CompileError> {
 // type-suffix = func-params
 //             = "[" num "]" type-suffix
 //             = ε
-fn type_suffix(tok: &mut &Token, ty: &Rc<Type>) -> Result<Rc<Type>, CompileError> {
+fn type_suffix(tok: &mut &Token, ty: &Rc<Type>, ctx: &Context) -> Result<Rc<Type>> {
     if tokenize::equal(tok, "(") {
-        let params = func_params(tok)?;
+        let params = func_params(tok, ctx)?;
         Ok(Type::new_func(params, ty))
     } else if tokenize::equal(tok, "[") {
-        tokenize::expect(tok, "[")?;
-        let len = tokenize::expect_number(tok)?;
-        tokenize::expect(tok, "]")?;
-        let base_ty = type_suffix(tok, ty)?;
+        tokenize::expect(tok, "[", ctx)?;
+        let len = tokenize::expect_number(tok, ctx)?;
+        tokenize::expect(tok, "]", ctx)?;
+        let base_ty = type_suffix(tok, ty, ctx)?;
         Ok(Type::new_array(&base_ty, len as usize))
     } else {
         Ok(Rc::clone(ty))
@@ -588,37 +403,37 @@ fn type_suffix(tok: &mut &Token, ty: &Rc<Type>) -> Result<Rc<Type>, CompileError
 }
 
 // declarator = "*"* ident type-suffix
-fn declarator(tok: &mut &Token, base_ty: &Rc<Type>) -> Result<Decl, CompileError> {
+fn declarator(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &Context) -> Result<Decl> {
     let mut ty = Rc::clone(base_ty);
     while tokenize::consume(tok, "*") {
         ty = Type::new_ptr(&ty);
     }
-    if tok.kind != TokenKind::Ident {
-        return Err(CompileError {
-            loc: tok.loc,
-            msg: "expected an identifier".to_owned(),
-        });
+    if !matches!(tok.kind, TokenKind::Ident) {
+        bail!(error_message("expected an identifier", ctx, tok.loc));
     }
-    let ident = tokenize::consume_ident(tok).unwrap();
-    ty = type_suffix(tok, &ty)?;
-    Ok(Decl {
-        name: ident.text.to_owned(),
-        ty,
-    })
+    if let Some(ident) = tokenize::consume_ident(tok) {
+        ty = type_suffix(tok, &ty, ctx)?;
+        Ok(Decl {
+            name: ident.to_owned(),
+            ty,
+        })
+    } else {
+        bail!(error_message("expected an identifier", ctx, tok.loc));
+    }
 }
 
 // declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
-fn declaration(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileError> {
+fn declaration(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    let base_ty = declspec(tok)?;
+    let base_ty = declspec(tok, ctx)?;
     let mut stmt_vec = Vec::new();
     let mut count = 0;
     while !tokenize::consume(tok, ";") {
         if count > 0 {
-            tokenize::expect(tok, ",")?;
+            tokenize::expect(tok, ",", ctx)?;
         }
         let loc = tok.loc;
-        let decl = declarator(tok, &base_ty)?;
+        let decl = declarator(tok, &base_ty, ctx)?;
         let obj = ctx.new_lvar(&decl);
         if tokenize::consume(tok, "=") {
             let lhs = Expr::new_var(obj, loc);
@@ -646,11 +461,11 @@ fn declaration(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Co
 //      | "{" block-item* "}"
 //      | expr-stmt
 //      | null-stmt
-fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileError> {
+fn stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     if is_typename(tok) {
         Ok(declaration(tok, ctx)?)
     } else if tokenize::equal(tok, ";") {
-        Ok(null_stmt(tok)?)
+        Ok(null_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "return") {
         Ok(return_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "{") {
@@ -666,9 +481,9 @@ fn stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileEr
     }
 }
 
-fn null_stmt(tok: &mut &Token) -> Result<Box<Stmt>, CompileError> {
+fn null_stmt(tok: &mut &Token, ctx: &Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, ";")?;
+    tokenize::expect(tok, ";", ctx)?;
     let stmt = Stmt {
         kind: StmtKind::NullStmt,
         loc,
@@ -676,20 +491,20 @@ fn null_stmt(tok: &mut &Token) -> Result<Box<Stmt>, CompileError> {
     Ok(Box::new(stmt))
 }
 
-fn return_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileError> {
+fn return_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "return")?;
+    tokenize::expect(tok, "return", ctx)?;
     let stmt = Stmt {
         kind: StmtKind::ReturnStmt(expr(tok, ctx)?),
         loc,
     };
-    tokenize::expect(tok, ";")?;
+    tokenize::expect(tok, ";", ctx)?;
     Ok(Box::new(stmt))
 }
 
-fn compound_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileError> {
+fn compound_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "{")?;
+    tokenize::expect(tok, "{", ctx)?;
     let mut block = Vec::new();
     while !tokenize::consume(tok, "}") {
         block.push(stmt(tok, ctx)?);
@@ -701,22 +516,22 @@ fn compound_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, 
     Ok(Box::new(stmt))
 }
 
-fn expr_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileError> {
+fn expr_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
     let stmt = Stmt {
         kind: StmtKind::ExprStmt(expr(tok, ctx)?),
         loc,
     };
-    tokenize::expect(tok, ";")?;
+    tokenize::expect(tok, ";", ctx)?;
     Ok(Box::new(stmt))
 }
 
-fn if_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileError> {
+fn if_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "if")?;
-    tokenize::expect(tok, "(")?;
+    tokenize::expect(tok, "if", ctx)?;
+    tokenize::expect(tok, "(", ctx)?;
     let cond = expr(tok, ctx)?;
-    tokenize::expect(tok, ")")?;
+    tokenize::expect(tok, ")", ctx)?;
     let then = stmt(tok, ctx)?;
     let mut els = None;
     if tokenize::consume(tok, "else") {
@@ -729,21 +544,21 @@ fn if_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Compil
     Ok(Box::new(stmt))
 }
 
-fn for_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileError> {
+fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "for")?;
-    tokenize::expect(tok, "(")?;
+    tokenize::expect(tok, "for", ctx)?;
+    tokenize::expect(tok, "(", ctx)?;
     let init = stmt(tok, ctx)?;
     let mut cond = None;
     if !tokenize::equal(tok, ";") {
         cond = Some(expr(tok, ctx)?);
     }
-    tokenize::expect(tok, ";")?;
+    tokenize::expect(tok, ";", ctx)?;
     let mut inc = None;
     if !tokenize::equal(tok, ")") {
         inc = Some(expr(tok, ctx)?);
     }
-    tokenize::expect(tok, ")")?;
+    tokenize::expect(tok, ")", ctx)?;
     let body = stmt(tok, ctx)?;
     let stmt = Stmt {
         kind: StmtKind::ForStmt {
@@ -757,12 +572,12 @@ fn for_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Compi
     Ok(Box::new(stmt))
 }
 
-fn while_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, CompileError> {
+fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "while")?;
-    tokenize::expect(tok, "(")?;
+    tokenize::expect(tok, "while", ctx)?;
+    tokenize::expect(tok, "(", ctx)?;
     let cond = expr(tok, ctx)?;
-    tokenize::expect(tok, ")")?;
+    tokenize::expect(tok, ")", ctx)?;
     let body = stmt(tok, ctx)?;
     let stmt = Stmt {
         kind: StmtKind::WhileStmt { cond, body },
@@ -772,12 +587,12 @@ fn while_stmt(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Stmt>, Com
 }
 
 // expr = assign
-fn expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     assign(tok, ctx)
 }
 
 // assign = equality ("=" assign)?
-fn assign(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let lhs = equality(tok, ctx)?;
     let loc = tok.loc;
     if tokenize::consume(tok, "=") {
@@ -789,16 +604,16 @@ fn assign(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Compile
 }
 
 // equality = relational ("==" relational | "!=" relational)*
-fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn equality(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = relational(tok, ctx)?;
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "==") {
-            expr = Expr::new_binary(BinaryOp::EQ, expr, relational(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::EQ, expr, relational(tok, ctx)?, ctx, loc)?;
             continue;
         }
         if tokenize::consume(tok, "!=") {
-            expr = Expr::new_binary(BinaryOp::NE, expr, relational(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::NE, expr, relational(tok, ctx)?, ctx, loc)?;
             continue;
         }
         break Ok(expr);
@@ -806,24 +621,24 @@ fn equality(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Compi
 }
 
 // relational = add ("<" add | "<=" add | ">" add | ">=" add)*
-fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn relational(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = add(tok, ctx)?;
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "<") {
-            expr = Expr::new_binary(BinaryOp::LT, expr, add(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::LT, expr, add(tok, ctx)?, ctx, loc)?;
             continue;
         }
         if tokenize::consume(tok, "<=") {
-            expr = Expr::new_binary(BinaryOp::LE, expr, add(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::LE, expr, add(tok, ctx)?, ctx, loc)?;
             continue;
         }
         if tokenize::consume(tok, ">") {
-            expr = Expr::new_binary(BinaryOp::LT, add(tok, ctx)?, expr, loc)?;
+            expr = Expr::new_binary(BinaryOp::LT, add(tok, ctx)?, expr, ctx, loc)?;
             continue;
         }
         if tokenize::consume(tok, ">=") {
-            expr = Expr::new_binary(BinaryOp::LE, add(tok, ctx)?, expr, loc)?;
+            expr = Expr::new_binary(BinaryOp::LE, add(tok, ctx)?, expr, ctx, loc)?;
             continue;
         }
         break Ok(expr);
@@ -831,18 +646,18 @@ fn relational(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Com
 }
 
 // add = mul ("+" mul | "-" mul)*
-fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn add(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = mul(tok, ctx)?;
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "+") {
             let rhs = mul(tok, ctx)?;
-            expr = Expr::new_binary(BinaryOp::ADD, expr, rhs, loc)?;
+            expr = Expr::new_binary(BinaryOp::ADD, expr, rhs, ctx, loc)?;
             continue;
         }
         if tokenize::consume(tok, "-") {
             let rhs = mul(tok, ctx)?;
-            expr = Expr::new_binary(BinaryOp::SUB, expr, rhs, loc)?;
+            expr = Expr::new_binary(BinaryOp::SUB, expr, rhs, ctx, loc)?;
             continue;
         }
         break Ok(expr);
@@ -850,16 +665,16 @@ fn add(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileErr
 }
 
 // mul = unary ("*" unary | "/" unary)*
-fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn mul(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = unary(tok, ctx)?;
     loop {
         let loc = tok.loc;
         if tokenize::consume(tok, "*") {
-            expr = Expr::new_binary(BinaryOp::MUL, expr, unary(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::MUL, expr, unary(tok, ctx)?, ctx, loc)?;
             continue;
         }
         if tokenize::consume(tok, "/") {
-            expr = Expr::new_binary(BinaryOp::DIV, expr, unary(tok, ctx)?, loc)?;
+            expr = Expr::new_binary(BinaryOp::DIV, expr, unary(tok, ctx)?, ctx, loc)?;
             continue;
         }
         break Ok(expr);
@@ -868,64 +683,49 @@ fn mul(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileErr
 
 // unary = ("+" | "-" | "*" | "&") unary
 //       | postfix
-fn unary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let loc = tok.loc;
     if tokenize::consume(tok, "+") {
         unary(tok, ctx)
     } else if tokenize::consume(tok, "-") {
-        Ok(Expr::new_unary(UnaryOp::NEG, unary(tok, ctx)?, loc))?
+        Ok(Expr::new_unary(UnaryOp::NEG, unary(tok, ctx)?, ctx, loc)?)
     } else if tokenize::consume(tok, "*") {
-        Ok(Expr::new_unary(UnaryOp::DEREF, unary(tok, ctx)?, loc))?
+        Ok(Expr::new_unary(UnaryOp::DEREF, unary(tok, ctx)?, ctx, loc)?)
     } else if tokenize::consume(tok, "&") {
-        Ok(Expr::new_unary(UnaryOp::ADDR, unary(tok, ctx)?, loc))?
+        Ok(Expr::new_unary(UnaryOp::ADDR, unary(tok, ctx)?, ctx, loc)?)
     } else {
         postfix(tok, ctx)
     }
 }
 
 // postfix = primary ("[" expr "]")*
-fn postfix(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn postfix(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut ret = primary(tok, ctx)?;
     while tokenize::equal(tok, "[") {
         let loc = tok.loc;
-        tokenize::expect(tok, "[")?;
+        tokenize::expect(tok, "[", ctx)?;
         let index = expr(tok, ctx)?;
-        tokenize::expect(tok, "]")?;
+        tokenize::expect(tok, "]", ctx)?;
         ret = Expr::new_unary(
             UnaryOp::DEREF,
-            Expr::new_binary(BinaryOp::ADD, ret, index, loc)?,
+            Expr::new_binary(BinaryOp::ADD, ret, index, ctx, loc)?,
+            ctx,
             loc,
         )?;
     }
     Ok(ret)
 }
 
-// funcall = ident "(" (expr ("," expr)*)? ")"
-fn funcall(
-    ident: &Token,
-    tok: &mut &Token,
-    ctx: &mut ParseContext,
-) -> Result<Box<Expr>, CompileError> {
-    tokenize::expect(tok, "(")?;
-    let mut args = Vec::new();
-    while !tokenize::consume(tok, ")") {
-        if args.len() > 0 {
-            tokenize::expect(tok, ",")?;
-        }
-        args.push(expr(tok, ctx)?);
-    }
-    Ok(Expr::new_funcall(&ident.text, args, ident.loc))
-}
-
-fn stmt_expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+fn stmt_expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let loc = tok.loc;
     let stmt = compound_stmt(tok, ctx)?;
     if let StmtKind::CompoundStmt(stmt_vec) = stmt.kind {
         if stmt_vec.is_empty() {
-            return Err(CompileError {
-                loc,
-                msg: "statement expression returning void is not supported".to_owned(),
-            });
+            bail!(error_message(
+                "statement expression returning void is not supported",
+                ctx,
+                loc
+            ));
         }
         if let StmtKind::ExprStmt(expr) = &stmt_vec.last().unwrap().kind {
             let ty = Rc::clone(&expr.ty);
@@ -936,10 +736,11 @@ fn stmt_expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Comp
             };
             return Ok(Box::new(expr));
         } else {
-            return Err(CompileError {
-                loc,
-                msg: "statement expression returning void is not supported".to_owned(),
-            });
+            bail!(error_message(
+                "statement expression returning void is not supported",
+                ctx,
+                loc
+            ));
         }
     } else {
         unreachable!();
@@ -952,7 +753,9 @@ fn stmt_expr(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Comp
 //         | ident func-args?
 //         | str
 //         | num
-fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, CompileError> {
+//
+// func-args = "(" (expr ("," expr)*)? ")"
+fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let loc = tok.loc;
 
     if tokenize::consume(tok, "(") {
@@ -962,7 +765,7 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Compil
         } else {
             inner = expr(tok, ctx)?
         }
-        tokenize::expect(tok, ")")?;
+        tokenize::expect(tok, ")", ctx)?;
         return Ok(inner);
     }
 
@@ -977,17 +780,21 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Compil
 
     if let Some(ident) = tokenize::consume_ident(tok) {
         // Function call
-        if tokenize::equal(tok, "(") {
-            return funcall(ident, tok, ctx);
+        if tokenize::consume(tok, "(") {
+            let mut args = Vec::new();
+            while !tokenize::consume(tok, ")") {
+                if args.len() > 0 {
+                    tokenize::expect(tok, ",", ctx)?;
+                }
+                args.push(expr(tok, ctx)?);
+            }
+            return Ok(Expr::new_funcall(ident, args, loc));
         }
         // Variable
-        if let Some(obj) = ctx.find_var(&ident.text) {
+        if let Some(obj) = ctx.find_var(&ident) {
             return Ok(Expr::new_var(obj, loc));
         } else {
-            return Err(CompileError {
-                loc,
-                msg: "undefined variable".to_owned(),
-            });
+            bail!(error_message("undefined variable", ctx, loc));
         }
     }
 
@@ -996,8 +803,5 @@ fn primary(tok: &mut &Token, ctx: &mut ParseContext) -> Result<Box<Expr>, Compil
         return Ok(Expr::new_var(obj, loc));
     }
 
-    Err(CompileError {
-        loc: tok.loc,
-        msg: "expected an expression".to_owned(),
-    })
+    bail!(error_message("expected an expression", ctx, loc))
 }
