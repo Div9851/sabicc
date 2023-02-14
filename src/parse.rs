@@ -249,9 +249,14 @@ impl Expr {
             }
             UnaryOp::DEREF => {
                 if expr.ty.is_ptr() {
+                    if let TypeKind::Ptr(base_ty) = &expr.ty.kind {
+                        if base_ty.is_void() {
+                            bail!(error_message("dereferencing a void pointer", ctx, loc));
+                        }
+                    }
                     result_ty = Rc::clone(expr.ty.get_base_ty());
                 } else {
-                    bail!(error_message("invalid operand", ctx, loc));
+                    bail!(error_message("invalid pointer dereference", ctx, loc));
                 }
             }
             UnaryOp::ADDR => {
@@ -393,7 +398,8 @@ fn is_function_definition(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
 
 // Returns true if a given token represents a type.
 fn is_typename(tok: &Token) -> bool {
-    tokenize::equal(tok, "char")
+    tokenize::equal(tok, "void")
+        || tokenize::equal(tok, "char")
         || tokenize::equal(tok, "short")
         || tokenize::equal(tok, "int")
         || tokenize::equal(tok, "long")
@@ -401,8 +407,11 @@ fn is_typename(tok: &Token) -> bool {
         || tokenize::equal(tok, "union")
 }
 
-// declspec = "char" | "short" | "int" | "long" | "struct-decl
+// declspec = "void" | "char" | "short" | "int" | "long" | "struct-decl
 fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
+    if tokenize::consume(tok, "void") {
+        return Ok(Type::new_void());
+    }
     if tokenize::consume(tok, "char") {
         return Ok(Type::new_char());
     }
@@ -569,6 +578,9 @@ fn declaration(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         }
         let loc = tok.loc;
         let decl = declarator(tok, &base_ty, ctx)?;
+        if decl.ty.is_void() {
+            bail!(error_message("variable declared void", ctx, loc));
+        }
         let obj = ctx.new_lvar(&decl);
         if tokenize::consume(tok, "=") {
             let lhs = Expr::new_var(obj, loc);

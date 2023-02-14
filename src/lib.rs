@@ -29,6 +29,7 @@ pub struct Decl {
 }
 
 pub enum TypeKind {
+    Void,
     Char,
     Short,
     Int,
@@ -50,6 +51,14 @@ pub struct Type {
 }
 
 impl Type {
+    fn new_void() -> Rc<Type> {
+        Rc::new(Type {
+            kind: TypeKind::Void,
+            size: 1,
+            align: 1,
+        })
+    }
+
     fn new_char() -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Char,
@@ -162,10 +171,14 @@ impl Type {
             }
         }
         Rc::new(Type {
-            kind: TypeKind::Struct(members),
+            kind: TypeKind::Union(members),
             size: align_to(size, align),
             align,
         })
+    }
+
+    pub fn is_void(&self) -> bool {
+        matches!(self.kind, TypeKind::Void)
     }
 
     pub fn is_integer(&self) -> bool {

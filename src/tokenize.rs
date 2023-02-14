@@ -146,6 +146,7 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "long"
         || tok.text == "struct"
         || tok.text == "union"
+        || tok.text == "void"
     {
         tok.kind = TokenKind::Keyword;
     }
