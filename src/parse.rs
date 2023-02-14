@@ -376,12 +376,10 @@ fn is_func(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
     }
     let cur = *tok;
     let dummy = Type::new_int();
-    let cur_stack_size = ctx.stack_size;
     ctx.stack_size = 0;
     ctx.enter_scope();
     let decl = declarator(tok, &dummy, ctx)?;
     ctx.leave_scope();
-    ctx.stack_size = cur_stack_size;
     *tok = cur;
     Ok(decl.ty.is_func())
 }
@@ -436,7 +434,6 @@ fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
     }
     let ty = struct_members(tok, ctx)?;
     if let Some(tag) = tag {
-        println!("new tag! {}\n", tag);
         ctx.new_struct_tag(tag, &ty);
     }
     Ok(ty)
@@ -786,12 +783,12 @@ fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 }
 
-// postfix = primary ("[" expr "]" | "." ident)*
+// postfix = primary ("[" expr "]" | "." ident | "->" ident)*
 fn postfix(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut ret = primary(tok, ctx)?;
-    while tokenize::equal(tok, "[") | tokenize::equal(tok, ".") {
+    loop {
+        let loc = tok.loc;
         if tokenize::consume(tok, "[") {
-            let loc = tok.loc;
             let index = expr(tok, ctx)?;
             tokenize::expect(tok, "]", ctx)?;
             ret = Expr::new_unary(
@@ -800,11 +797,15 @@ fn postfix(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
                 ctx,
                 loc,
             )?;
-        } else {
-            tokenize::expect(tok, ".", ctx)?;
-            let loc = tok.loc;
+        } else if tokenize::consume(tok, ".") {
             let name = tokenize::expect_ident(tok, ctx)?;
             ret = Expr::new_member(ret, name, ctx, loc)?;
+        } else if tokenize::consume(tok, "->") {
+            ret = Expr::new_unary(UnaryOp::DEREF, ret, ctx, loc)?;
+            let name = tokenize::expect_ident(tok, ctx)?;
+            ret = Expr::new_member(ret, name, ctx, loc)?;
+        } else {
+            break;
         }
     }
     Ok(ret)
