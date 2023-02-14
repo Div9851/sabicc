@@ -319,9 +319,9 @@ pub fn program(text: String, filename: &str) -> Result<Program> {
     let mut tok = head.as_ref();
     program.ctx.enter_scope();
     while !tokenize::at_eof(tok) {
-        let base_ty = declspec(&mut tok, &program.ctx)?;
+        let base_ty = declspec(&mut tok, &mut program.ctx)?;
         // Function
-        if is_func(&mut tok, &mut program.ctx) {
+        if is_func(&mut tok, &mut program.ctx)? {
             program
                 .funcs
                 .push(func(&mut tok, &base_ty, &mut program.ctx)?);
@@ -347,24 +347,19 @@ fn global_variable(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> R
 }
 
 pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<Box<Func>> {
+    ctx.stack_size = 0;
+    ctx.enter_scope();
     let loc = tok.loc;
     let decl = declarator(tok, base_ty, ctx)?;
+    ctx.new_gvar(&decl);
     if let TypeKind::Func { params, return_ty } = &decl.ty.kind {
-        ctx.new_gvar(&decl);
-        ctx.stack_size = 0;
-        ctx.enter_scope();
-        let mut params_obj = Vec::new();
-        for param in params {
-            let obj = ctx.new_lvar(param);
-            params_obj.push(obj);
-        }
         let body = compound_stmt(tok, ctx)?;
         ctx.leave_scope();
         ctx.stack_size = align_to(ctx.stack_size, 16);
         Ok(Box::new(Func {
             name: decl.name,
-            return_ty: Rc::clone(return_ty),
-            params: params_obj,
+            return_ty: Rc::clone(&return_ty),
+            params: params.clone(),
             body,
             stack_size: ctx.stack_size,
         }))
@@ -375,18 +370,20 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<B
 
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition or declaration.
-fn is_func(tok: &mut &Token, ctx: &Context) -> bool {
+fn is_func(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
     if tokenize::equal(tok, ";") {
-        return false;
+        return Ok(false);
     }
     let cur = *tok;
-    let dummy = Rc::new(Type::new_int());
-    let result = declarator(tok, &dummy, ctx);
+    let dummy = Type::new_int();
+    let cur_stack_size = ctx.stack_size;
+    ctx.stack_size = 0;
+    ctx.enter_scope();
+    let decl = declarator(tok, &dummy, ctx)?;
+    ctx.leave_scope();
+    ctx.stack_size = cur_stack_size;
     *tok = cur;
-    match result {
-        Ok(decl) => decl.ty.is_func(),
-        Err(_) => false,
-    }
+    Ok(decl.ty.is_func())
 }
 
 // Returns true if a given token represents a type.
@@ -395,7 +392,7 @@ fn is_typename(tok: &Token) -> bool {
 }
 
 // declspec = "char" | "int" | "struct-decl
-fn declspec(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
+fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
     if tokenize::consume(tok, "char") {
         return Ok(Type::new_char());
     }
@@ -407,7 +404,7 @@ fn declspec(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
 }
 
 // struct-members = "{" (declspec declarator ("," declarator)* ";")* "}"
-fn struct_members(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
+fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
     tokenize::expect(tok, "{", ctx)?;
     let mut member_decls = Vec::new();
     while !tokenize::consume(tok, "}") {
@@ -425,15 +422,29 @@ fn struct_members(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
     Ok(Type::new_struct(member_decls))
 }
 
-// struct-decl = "struct" struct-members
-fn struct_decl(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
+// struct-decl = "struct" (ident | ident? struct-members)
+fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
     tokenize::expect(tok, "struct", ctx)?;
-    struct_members(tok, ctx)
+    let loc = tok.loc;
+    let tag = tokenize::consume_ident(tok);
+    if tag.is_some() && !tokenize::equal(tok, "{") {
+        let tag = tag.unwrap();
+        if let Some(ty) = ctx.find_struct_tag(tag) {
+            return Ok(ty);
+        }
+        bail!(error_message("unknown struct type", ctx, loc));
+    }
+    let ty = struct_members(tok, ctx)?;
+    if let Some(tag) = tag {
+        println!("new tag! {}\n", tag);
+        ctx.new_struct_tag(tag, &ty);
+    }
+    Ok(ty)
 }
 
 // func-params = "(" (param ("," param)*)? ")"
 // param       = declspec declarator
-fn func_params(tok: &mut &Token, ctx: &Context) -> Result<Vec<Decl>> {
+fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
     tokenize::expect(tok, "(", ctx)?;
     let mut params = Vec::new();
     while !tokenize::consume(tok, ")") {
@@ -450,9 +461,14 @@ fn func_params(tok: &mut &Token, ctx: &Context) -> Result<Vec<Decl>> {
 // type-suffix = func-params
 //             = "[" num "]" type-suffix
 //             = ε
-fn type_suffix(tok: &mut &Token, ty: &Rc<Type>, ctx: &Context) -> Result<Rc<Type>> {
+fn type_suffix(tok: &mut &Token, ty: &Rc<Type>, ctx: &mut Context) -> Result<Rc<Type>> {
     if tokenize::equal(tok, "(") {
-        let params = func_params(tok, ctx)?;
+        let param_decls = func_params(tok, ctx)?;
+        let mut params = Vec::new();
+        for param_decl in param_decls {
+            let param = ctx.new_lvar(&param_decl);
+            params.push(param);
+        }
         Ok(Type::new_func(params, ty))
     } else if tokenize::equal(tok, "[") {
         tokenize::expect(tok, "[", ctx)?;
@@ -466,7 +482,7 @@ fn type_suffix(tok: &mut &Token, ty: &Rc<Type>, ctx: &Context) -> Result<Rc<Type
 }
 
 // declarator = "*"* ident type-suffix
-fn declarator(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &Context) -> Result<Decl> {
+fn declarator(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<Decl> {
     let mut ty = Rc::clone(base_ty);
     while tokenize::consume(tok, "*") {
         ty = Type::new_ptr(&ty);

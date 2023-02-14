@@ -34,7 +34,7 @@ pub enum TypeKind {
     Ptr(Rc<Type>),
     Array(Rc<Type>, usize),
     Func {
-        params: Vec<Decl>,
+        params: Vec<Obj>,
         return_ty: Rc<Type>,
     },
     Struct(HashMap<String, Member>),
@@ -78,7 +78,7 @@ impl Type {
             align: base_ty.align,
         })
     }
-    fn new_func(params: Vec<Decl>, return_ty: &Rc<Type>) -> Rc<Type> {
+    fn new_func(params: Vec<Obj>, return_ty: &Rc<Type>) -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Func {
                 params,
@@ -147,6 +147,7 @@ pub struct Context {
     pub line_start_pos: Vec<usize>,
     pub line_end_pos: Vec<usize>,
     pub scopes: Vec<HashMap<String, Obj>>,
+    pub tag_scopes: Vec<HashMap<String, Rc<Type>>>,
     pub init_data: HashMap<String, Vec<u8>>,
     pub id: usize,
     pub stack_size: usize,
@@ -176,6 +177,7 @@ impl Context {
             line_start_pos,
             line_end_pos,
             scopes: Vec::new(),
+            tag_scopes: Vec::new(),
             init_data: HashMap::new(),
             id: 0,
             stack_size: 0,
@@ -183,9 +185,11 @@ impl Context {
     }
     pub fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.tag_scopes.push(HashMap::new());
     }
     pub fn leave_scope(&mut self) {
         self.scopes.pop();
+        self.tag_scopes.pop();
     }
     pub fn new_lvar(&mut self, decl: &Decl) -> Obj {
         self.stack_size += decl.ty.size;
@@ -211,6 +215,12 @@ impl Context {
             .insert(decl.name.clone(), obj.clone());
         obj
     }
+    fn new_struct_tag(&mut self, tag: &str, ty: &Rc<Type>) {
+        self.tag_scopes
+            .last_mut()
+            .unwrap()
+            .insert(tag.to_owned(), Rc::clone(ty));
+    }
     fn new_unique_name(&mut self) -> String {
         let name = format!(".L..{}", self.id);
         self.id += 1;
@@ -230,6 +240,14 @@ impl Context {
         for scope in self.scopes.iter().rev() {
             if let Some(obj) = scope.get(name) {
                 return Some(obj.clone());
+            }
+        }
+        None
+    }
+    pub fn find_struct_tag(&self, tag: &str) -> Option<Rc<Type>> {
+        for tag_scope in self.tag_scopes.iter().rev() {
+            if let Some(ty) = tag_scope.get(tag) {
+                return Some(Rc::clone(ty));
             }
         }
         None
