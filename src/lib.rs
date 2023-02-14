@@ -51,8 +51,8 @@ impl Type {
     fn new_int() -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Int,
-            size: 8,
-            align: 8,
+            size: 4,
+            align: 4,
         })
     }
     fn new_char() -> Rc<Type> {

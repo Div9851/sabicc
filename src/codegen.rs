@@ -5,6 +5,7 @@ use anyhow::{bail, Result};
 use std::unreachable;
 
 static ARGREG64: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+static ARGREG32: [&'static str; 6] = ["edi", "esi", "edx", "ecx", "r8d", "r9d"];
 static ARGREG8: [&'static str; 6] = ["dil", "sil", "dl", "cl", "r8b", "r9b"];
 
 fn push() -> String {
@@ -30,6 +31,8 @@ fn store(ty: &Type) -> String {
 
     if ty.size == 1 {
         text += "  mov [rdi], al\n";
+    } else if ty.size == 4 {
+        text += "   mov [rdi], eax\n";
     } else {
         text += "  mov [rdi], rax\n";
     }
@@ -90,6 +93,8 @@ fn load(ty: &Type) -> String {
 
     if ty.size == 1 {
         "  movsbq rax, [rax]\n".to_owned()
+    } else if ty.size == 4 {
+        "   movsxd rax, [rax]\n".to_owned()
     } else {
         "  mov rax, [rax]\n".to_owned()
     }
@@ -130,6 +135,18 @@ fn emit_data(obj: &Obj, ctx: &Context) -> Result<String> {
     Ok(text)
 }
 
+fn store_gp(r: usize, offset: usize, sz: usize) -> String {
+    if sz == 1 {
+        format!("  mov [rbp-{}], {}\n", offset, ARGREG8[r])
+    } else if sz == 4 {
+        format!("  mov [rbp-{}], {}\n", offset, ARGREG32[r])
+    } else if sz == 8 {
+        format!("  mov [rbp-{}], {}\n", offset, ARGREG64[r])
+    } else {
+        unreachable!();
+    }
+}
+
 fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
     let mut text = String::new();
     text += &format!(".globl {}\n", func.name);
@@ -140,18 +157,12 @@ fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
     text += "  mov rbp, rsp\n";
     text += &format!("  sub rsp, {}\n", func.stack_size);
     // Save passed-by-register arguments to the stack
-    let mut nargs = 0;
-    for obj in &func.params {
+    for (r, obj) in func.params.iter().enumerate() {
         if let ObjKind::Local(offset) = obj.kind {
-            if obj.ty.size == 1 {
-                text += &format!("  mov [rbp-{}], {}\n", offset, ARGREG8[nargs]);
-            } else {
-                text += &format!("  mov [rbp-{}], {}\n", offset, ARGREG64[nargs]);
-            }
+            text += &store_gp(r, offset, obj.ty.size);
         } else {
             unreachable!();
         }
-        nargs += 1;
     }
     // Body
     text += &gen_stmt(&func.body, ctx)?;
