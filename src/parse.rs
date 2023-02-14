@@ -3,7 +3,7 @@ use std::mem;
 use std::rc::Rc;
 
 use crate::tokenize::{self, Token, TokenKind};
-use crate::{error_message, Context, Decl, Obj, Type, TypeKind};
+use crate::{align_to, error_message, Context, Decl, Obj, Type, TypeKind};
 
 pub struct Program {
     pub funcs: Vec<Box<Func>>,
@@ -360,6 +360,7 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<B
         }
         let body = compound_stmt(tok, ctx)?;
         ctx.leave_scope();
+        ctx.stack_size = align_to(ctx.stack_size, 16);
         Ok(Box::new(Func {
             name: decl.name,
             return_ty: Rc::clone(return_ty),

@@ -189,6 +189,7 @@ impl Context {
     }
     pub fn new_lvar(&mut self, decl: &Decl) -> Obj {
         self.stack_size += decl.ty.size;
+        self.stack_size = align_to(self.stack_size, decl.ty.align);
         let obj = Obj {
             kind: ObjKind::Local(self.stack_size),
             ty: Rc::clone(&decl.ty),

@@ -1,5 +1,5 @@
 use crate::parse::{BinaryOp, Expr, ExprKind, Func, Program, Stmt, StmtKind, UnaryOp};
-use crate::{align_to, error_message, Context, Obj, ObjKind, Type, TypeKind};
+use crate::{error_message, Context, Obj, ObjKind, Type, TypeKind};
 
 use anyhow::{bail, Result};
 use std::unreachable;
@@ -130,7 +130,7 @@ fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
     // Prologue
     text += "  push rbp\n";
     text += "  mov rbp, rsp\n";
-    text += &format!("  sub rsp, {}\n", align_to(func.stack_size, 16));
+    text += &format!("  sub rsp, {}\n", func.stack_size);
     // Save passed-by-register arguments to the stack
     let mut nargs = 0;
     for obj in &func.params {
