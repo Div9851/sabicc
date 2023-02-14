@@ -89,6 +89,10 @@ pub enum ExprKind {
         op: UnaryOp,
         expr: Box<Expr>,
     },
+    Member {
+        expr: Box<Expr>,
+        offset: usize,
+    },
     Var(Obj),
     Num(i32),
     FunCall {
@@ -260,6 +264,26 @@ impl Expr {
         }))
     }
 
+    fn new_member(expr: Box<Expr>, name: &str, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
+        let offset;
+        let ty;
+        if let TypeKind::Struct(members) = &expr.ty.kind {
+            if let Some(member) = members.get(name) {
+                offset = member.offset;
+                ty = Rc::clone(&member.ty);
+            } else {
+                bail!(error_message("no such member", ctx, loc));
+            }
+        } else {
+            bail!(error_message("not struct", ctx, expr.loc));
+        }
+        Ok(Box::new(Expr {
+            kind: ExprKind::Member { expr, offset },
+            ty,
+            loc,
+        }))
+    }
+
     fn new_var(obj: Obj, loc: usize) -> Box<Expr> {
         let ty = Rc::clone(&obj.ty);
         Box::new(Expr {
@@ -366,16 +390,44 @@ fn is_func(tok: &mut &Token, ctx: &Context) -> bool {
 
 // Returns true if a given token represents a type.
 fn is_typename(tok: &Token) -> bool {
-    tokenize::equal(tok, "char") || tokenize::equal(tok, "int")
+    tokenize::equal(tok, "char") || tokenize::equal(tok, "int") || tokenize::equal(tok, "struct")
 }
 
-// declspec = "char" | "int"
+// declspec = "char" | "int" | "struct-decl
 fn declspec(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
     if tokenize::consume(tok, "char") {
         return Ok(Type::new_char());
     }
+    if tokenize::equal(tok, "struct") {
+        return Ok(struct_decl(tok, ctx)?);
+    }
     tokenize::expect(tok, "int", ctx)?;
     Ok(Type::new_int())
+}
+
+// struct-members = "{" (declspec declarator ("," declarator)* ";")* "}"
+fn struct_members(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
+    tokenize::expect(tok, "{", ctx)?;
+    let mut member_decls = Vec::new();
+    while !tokenize::consume(tok, "}") {
+        let base_ty = declspec(tok, ctx)?;
+        let mut first = true;
+        while !tokenize::consume(tok, ";") {
+            if !first {
+                tokenize::expect(tok, ",", ctx)?;
+            }
+            first = false;
+            let member_decl = declarator(tok, &base_ty, ctx)?;
+            member_decls.push(member_decl);
+        }
+    }
+    Ok(Type::new_struct(member_decls))
+}
+
+// struct-decl = "struct" struct-members
+fn struct_decl(tok: &mut &Token, ctx: &Context) -> Result<Rc<Type>> {
+    tokenize::expect(tok, "struct", ctx)?;
+    struct_members(tok, ctx)
 }
 
 // func-params = "(" (param ("," param)*)? ")"
@@ -717,20 +769,26 @@ fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 }
 
-// postfix = primary ("[" expr "]")*
+// postfix = primary ("[" expr "]" | "." ident)*
 fn postfix(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut ret = primary(tok, ctx)?;
-    while tokenize::equal(tok, "[") {
-        let loc = tok.loc;
-        tokenize::expect(tok, "[", ctx)?;
-        let index = expr(tok, ctx)?;
-        tokenize::expect(tok, "]", ctx)?;
-        ret = Expr::new_unary(
-            UnaryOp::DEREF,
-            Expr::new_binary(BinaryOp::ADD, ret, index, ctx, loc)?,
-            ctx,
-            loc,
-        )?;
+    while tokenize::equal(tok, "[") | tokenize::equal(tok, ".") {
+        if tokenize::consume(tok, "[") {
+            let loc = tok.loc;
+            let index = expr(tok, ctx)?;
+            tokenize::expect(tok, "]", ctx)?;
+            ret = Expr::new_unary(
+                UnaryOp::DEREF,
+                Expr::new_binary(BinaryOp::ADD, ret, index, ctx, loc)?,
+                ctx,
+                loc,
+            )?;
+        } else {
+            tokenize::expect(tok, ".", ctx)?;
+            let loc = tok.loc;
+            let name = tokenize::expect_ident(tok, ctx)?;
+            ret = Expr::new_member(ret, name, ctx, loc)?;
+        }
     }
     Ok(ret)
 }

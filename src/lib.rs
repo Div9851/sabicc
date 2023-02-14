@@ -7,13 +7,18 @@ use std::rc::Rc;
 
 #[derive(Clone)]
 pub enum ObjKind {
-    Local(usize),   // Offset from RBP
+    Local(usize),   // offset from RBP
     Global(String), // label
 }
 
 #[derive(Clone)]
 pub struct Obj {
     pub kind: ObjKind,
+    pub ty: Rc<Type>,
+}
+
+pub struct Member {
+    pub offset: usize,
     pub ty: Rc<Type>,
 }
 
@@ -32,6 +37,7 @@ pub enum TypeKind {
         params: Vec<Decl>,
         return_ty: Rc<Type>,
     },
+    Struct(HashMap<String, Member>),
 }
 
 pub struct Type {
@@ -76,6 +82,25 @@ impl Type {
             size: 0,
         })
     }
+    fn new_struct(member_decls: Vec<Decl>) -> Rc<Type> {
+        let mut members = HashMap::new();
+        let mut offset = 0;
+        for member_decl in member_decls {
+            let size = member_decl.ty.size;
+            members.insert(
+                member_decl.name,
+                Member {
+                    offset,
+                    ty: Rc::clone(&member_decl.ty),
+                },
+            );
+            offset += size;
+        }
+        Rc::new(Type {
+            kind: TypeKind::Struct(members),
+            size: offset,
+        })
+    }
     pub fn is_integer(&self) -> bool {
         matches!(self.kind, TypeKind::Int | TypeKind::Char)
     }
@@ -90,6 +115,9 @@ impl Type {
                 return_ty: _
             }
         )
+    }
+    pub fn is_struct(&self) -> bool {
+        matches!(self.kind, TypeKind::Struct(_))
     }
     pub fn get_base_ty(&self) -> &Rc<Type> {
         match &self.kind {

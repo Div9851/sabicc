@@ -69,6 +69,16 @@ pub fn expect_number(tok: &mut &Token, ctx: &Context) -> Result<i32> {
     }
 }
 
+pub fn expect_ident<'a>(tok: &mut &'a Token, ctx: &Context) -> Result<&'a str> {
+    if matches!(tok.kind, TokenKind::Ident) {
+        let text = &tok.text;
+        *tok = tok.next.as_ref().unwrap();
+        Ok(text)
+    } else {
+        bail!(error_message("expected an identifier", ctx, tok.loc))
+    }
+}
+
 pub fn consume_number(tok: &mut &Token) -> Option<i32> {
     if let TokenKind::Num(val) = tok.kind {
         *tok = tok.next.as_ref().unwrap();
@@ -131,6 +141,7 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "sizeof"
         || tok.text == "int"
         || tok.text == "char"
+        || tok.text == "struct"
     {
         tok.kind = TokenKind::Keyword;
     }

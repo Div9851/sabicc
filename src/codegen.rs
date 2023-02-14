@@ -66,6 +66,11 @@ fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             text += &gen_addr(rhs, ctx)?;
             return Ok(text);
         }
+        ExprKind::Member { expr, offset } => {
+            text += &gen_addr(expr, ctx)?;
+            text += &format!("  add rax, {}\n", offset);
+            return Ok(text);
+        }
         _ => bail!(error_message("not an lvalue", ctx, expr.loc)),
     }
 }
@@ -313,6 +318,10 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                     text += &gen_addr(&operand, ctx)?;
                 }
             };
+        }
+        ExprKind::Member { expr: _, offset: _ } => {
+            text += &gen_addr(expr, ctx)?;
+            text += &load(&expr.ty);
         }
         ExprKind::Var(_) => {
             text += &gen_addr(expr, ctx)?;
