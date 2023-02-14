@@ -6,6 +6,7 @@ use std::unreachable;
 
 static ARGREG64: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 static ARGREG32: [&'static str; 6] = ["edi", "esi", "edx", "ecx", "r8d", "r9d"];
+static ARGREG16: [&'static str; 6] = ["di", "si", "dx", "cx", "r8w", "r9w"];
 static ARGREG8: [&'static str; 6] = ["dil", "sil", "dl", "cl", "r8b", "r9b"];
 
 fn push() -> String {
@@ -31,6 +32,8 @@ fn store(ty: &Type) -> String {
 
     if ty.size == 1 {
         text += "  mov [rdi], al\n";
+    } else if ty.size == 2 {
+        text += "  mov [rdi], ax\n";
     } else if ty.size == 4 {
         text += "   mov [rdi], eax\n";
     } else {
@@ -93,6 +96,8 @@ fn load(ty: &Type) -> String {
 
     if ty.size == 1 {
         "  movsbq rax, [rax]\n".to_owned()
+    } else if ty.size == 2 {
+        "  movswq rax, [rax]\n".to_owned()
     } else if ty.size == 4 {
         "   movsxd rax, [rax]\n".to_owned()
     } else {
@@ -138,6 +143,8 @@ fn emit_data(obj: &Obj, ctx: &Context) -> Result<String> {
 fn store_gp(r: usize, offset: usize, sz: usize) -> String {
     if sz == 1 {
         format!("  mov [rbp-{}], {}\n", offset, ARGREG8[r])
+    } else if sz == 2 {
+        format!("  mov [rbp-{}], {}\n", offset, ARGREG16[r])
     } else if sz == 4 {
         format!("  mov [rbp-{}], {}\n", offset, ARGREG32[r])
     } else if sz == 8 {

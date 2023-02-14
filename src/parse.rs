@@ -397,11 +397,14 @@ fn is_typename(tok: &Token) -> bool {
 
 // declspec = "char" | "short" | "int" | "long" | "struct-decl
 fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
-    if tokenize::consume(tok, "int") {
-        return Ok(Type::new_int());
-    }
     if tokenize::consume(tok, "char") {
         return Ok(Type::new_char());
+    }
+    if tokenize::consume(tok, "short") {
+        return Ok(Type::new_short());
+    }
+    if tokenize::consume(tok, "int") {
+        return Ok(Type::new_int());
     }
     if tokenize::consume(tok, "long") {
         return Ok(Type::new_long());

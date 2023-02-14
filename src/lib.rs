@@ -29,8 +29,9 @@ pub struct Decl {
 }
 
 pub enum TypeKind {
-    Int,
     Char,
+    Short,
+    Int,
     Long,
     Ptr(Rc<Type>),
     Array(Rc<Type>, usize),
@@ -49,19 +50,27 @@ pub struct Type {
 }
 
 impl Type {
-    fn new_int() -> Rc<Type> {
-        Rc::new(Type {
-            kind: TypeKind::Int,
-            size: 4,
-            align: 4,
-        })
-    }
-
     fn new_char() -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Char,
             size: 1,
             align: 1,
+        })
+    }
+
+    fn new_short() -> Rc<Type> {
+        Rc::new(Type {
+            kind: TypeKind::Short,
+            size: 2,
+            align: 2,
+        })
+    }
+
+    fn new_int() -> Rc<Type> {
+        Rc::new(Type {
+            kind: TypeKind::Int,
+            size: 4,
+            align: 4,
         })
     }
 
@@ -160,7 +169,10 @@ impl Type {
     }
 
     pub fn is_integer(&self) -> bool {
-        matches!(self.kind, TypeKind::Int | TypeKind::Char | TypeKind::Long)
+        matches!(
+            self.kind,
+            TypeKind::Char | TypeKind::Short | TypeKind::Int | TypeKind::Long
+        )
     }
 
     pub fn is_ptr(&self) -> bool {
