@@ -113,8 +113,8 @@ pub fn gen_program(program: &mut Program) -> Result<String> {
     for (_, obj) in globals {
         text += &emit_data(obj, &program.ctx)?;
     }
-    let funcs = &program.funcs;
-    for func in funcs {
+    let functions = &program.functions;
+    for func in functions {
         text += &emit_text(func, &mut program.ctx)?;
     }
     Ok(text)

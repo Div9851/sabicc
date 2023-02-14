@@ -184,7 +184,7 @@ impl Type {
             self.kind,
             TypeKind::Func {
                 params: _,
-                return_ty: _
+                return_ty: _,
             }
         )
     }

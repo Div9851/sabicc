@@ -6,15 +6,15 @@ use crate::tokenize::{self, Token, TokenKind};
 use crate::{align_to, error_message, Context, Decl, Obj, Type, TypeKind};
 
 pub struct Program {
-    pub funcs: Vec<Box<Func>>,
+    pub functions: Vec<Box<Func>>,
     pub ctx: Context,
 }
 
 impl Program {
     fn new(text: String, filename: String) -> Program {
-        let funcs = Vec::new();
+        let functions = Vec::new();
         let ctx = Context::new(text, filename);
-        Program { funcs, ctx }
+        Program { functions, ctx }
     }
 }
 
@@ -322,13 +322,13 @@ pub fn program(text: String, filename: &str) -> Result<Program> {
     while !tokenize::at_eof(tok) {
         let base_ty = declspec(&mut tok, &mut program.ctx)?;
         // Function
-        if is_func(&mut tok, &mut program.ctx)? {
+        if is_function_definition(&mut tok, &mut program.ctx)? {
             program
-                .funcs
-                .push(func(&mut tok, &base_ty, &mut program.ctx)?);
+                .functions
+                .push(function(&mut tok, &base_ty, &mut program.ctx)?);
             continue;
         }
-        // Global variable
+        // Global variable or function declaration
         global_variable(&mut tok, &base_ty, &mut program.ctx)?;
     }
     Ok(program)
@@ -347,7 +347,7 @@ fn global_variable(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> R
     Ok(())
 }
 
-pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<Box<Func>> {
+pub fn function(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<Box<Func>> {
     ctx.stack_size = 0;
     ctx.enter_scope();
     let loc = tok.loc;
@@ -378,19 +378,17 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<B
 }
 
 // Lookahead tokens and returns true if a given token is a start
-// of a function definition or declaration.
-fn is_func(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
+// of a function definition
+fn is_function_definition(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
     if tokenize::equal(tok, ";") {
         return Ok(false);
     }
-    let cur = *tok;
+    let mut cur = *tok;
     let dummy = Type::new_int();
-    ctx.stack_size = 0;
     ctx.enter_scope();
-    let decl = declarator(tok, &dummy, ctx)?;
+    let decl = declarator(&mut cur, &dummy, ctx)?;
     ctx.leave_scope();
-    *tok = cur;
-    Ok(decl.ty.is_func())
+    Ok(decl.ty.is_func() && !tokenize::equal(cur, ";"))
 }
 
 // Returns true if a given token represents a type.
