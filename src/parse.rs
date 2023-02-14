@@ -267,7 +267,7 @@ impl Expr {
     fn new_member(expr: Box<Expr>, name: &str, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
         let offset;
         let ty;
-        if let TypeKind::Struct(members) = &expr.ty.kind {
+        if let TypeKind::Struct(members) | TypeKind::Union(members) = &expr.ty.kind {
             if let Some(member) = members.get(name) {
                 offset = member.offset;
                 ty = Rc::clone(&member.ty);
@@ -275,7 +275,7 @@ impl Expr {
                 bail!(error_message("no such member", ctx, loc));
             }
         } else {
-            bail!(error_message("not struct", ctx, expr.loc));
+            bail!(error_message("not struct nor union", ctx, expr.loc));
         }
         Ok(Box::new(Expr {
             kind: ExprKind::Member { expr, offset },
@@ -386,23 +386,31 @@ fn is_func(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
 
 // Returns true if a given token represents a type.
 fn is_typename(tok: &Token) -> bool {
-    tokenize::equal(tok, "char") || tokenize::equal(tok, "int") || tokenize::equal(tok, "struct")
+    tokenize::equal(tok, "char")
+        || tokenize::equal(tok, "int")
+        || tokenize::equal(tok, "struct")
+        || tokenize::equal(tok, "union")
 }
 
 // declspec = "char" | "int" | "struct-decl
 fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
+    if tokenize::consume(tok, "int") {
+        return Ok(Type::new_int());
+    }
     if tokenize::consume(tok, "char") {
         return Ok(Type::new_char());
     }
-    if tokenize::equal(tok, "struct") {
+    if tokenize::consume(tok, "struct") {
         return Ok(struct_decl(tok, ctx)?);
     }
-    tokenize::expect(tok, "int", ctx)?;
-    Ok(Type::new_int())
+    if tokenize::consume(tok, "union") {
+        return Ok(union_decl(tok, ctx)?);
+    }
+    bail!(error_message("typename expected", ctx, tok.loc));
 }
 
 // struct-members = "{" (declspec declarator ("," declarator)* ";")* "}"
-fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
+fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
     tokenize::expect(tok, "{", ctx)?;
     let mut member_decls = Vec::new();
     while !tokenize::consume(tok, "}") {
@@ -417,24 +425,57 @@ fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
             member_decls.push(member_decl);
         }
     }
-    Ok(Type::new_struct(member_decls))
+    Ok(member_decls)
 }
 
-// struct-decl = "struct" (ident | ident? struct-members)
-fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
-    tokenize::expect(tok, "struct", ctx)?;
+// union-decl = ident | ident? struct-members
+fn union_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
     let loc = tok.loc;
     let tag = tokenize::consume_ident(tok);
     if tag.is_some() && !tokenize::equal(tok, "{") {
         let tag = tag.unwrap();
-        if let Some(ty) = ctx.find_struct_tag(tag) {
+        if let Some(ty) = ctx.find_tag(tag) {
+            if !ty.is_union() {
+                bail!(error_message(
+                    &format!("'{}' defined as wrong kind of tag", tag),
+                    ctx,
+                    loc
+                ));
+            }
+            return Ok(ty);
+        }
+        bail!(error_message("unknown union type", ctx, loc));
+    }
+    let member_decls = struct_members(tok, ctx)?;
+    let ty = Type::new_union(member_decls);
+    if let Some(tag) = tag {
+        ctx.new_tag(tag, &ty);
+    }
+    Ok(ty)
+}
+
+// struct-decl = ident | ident? struct-members
+fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
+    let loc = tok.loc;
+    let tag = tokenize::consume_ident(tok);
+    if tag.is_some() && !tokenize::equal(tok, "{") {
+        let tag = tag.unwrap();
+        if let Some(ty) = ctx.find_tag(tag) {
+            if !ty.is_struct() {
+                bail!(error_message(
+                    &format!("'{}' defined as wrong kind of tag", tag),
+                    ctx,
+                    loc
+                ));
+            }
             return Ok(ty);
         }
         bail!(error_message("unknown struct type", ctx, loc));
     }
-    let ty = struct_members(tok, ctx)?;
+    let member_decls = struct_members(tok, ctx)?;
+    let ty = Type::new_struct(member_decls);
     if let Some(tag) = tag {
-        ctx.new_struct_tag(tag, &ty);
+        ctx.new_tag(tag, &ty);
     }
     Ok(ty)
 }

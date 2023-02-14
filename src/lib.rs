@@ -38,6 +38,7 @@ pub enum TypeKind {
         return_ty: Rc<Type>,
     },
     Struct(HashMap<String, Member>),
+    Union(HashMap<String, Member>),
 }
 
 pub struct Type {
@@ -61,9 +62,11 @@ impl Type {
             align: 1,
         })
     }
+
     fn new_str(len: usize) -> Rc<Type> {
         Type::new_array(&Type::new_char(), len)
     }
+
     fn new_ptr(base_ty: &Rc<Type>) -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Ptr(Rc::clone(base_ty)),
@@ -71,6 +74,7 @@ impl Type {
             align: 8,
         })
     }
+
     fn new_array(base_ty: &Rc<Type>, len: usize) -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Array(Rc::clone(base_ty), len),
@@ -78,6 +82,7 @@ impl Type {
             align: base_ty.align,
         })
     }
+
     fn new_func(params: Vec<Obj>, return_ty: &Rc<Type>) -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Func {
@@ -88,6 +93,7 @@ impl Type {
             align: 0,
         })
     }
+
     fn new_struct(member_decls: Vec<Decl>) -> Rc<Type> {
         let mut members = HashMap::new();
         let mut offset = 0;
@@ -114,12 +120,43 @@ impl Type {
             align,
         })
     }
+
+    fn new_union(member_decls: Vec<Decl>) -> Rc<Type> {
+        let mut members = HashMap::new();
+        let mut size = 0;
+        let mut align = 1;
+        for member_decl in member_decls {
+            let member_size = member_decl.ty.size;
+            let member_align = member_decl.ty.align;
+            members.insert(
+                member_decl.name,
+                Member {
+                    offset: 0,
+                    ty: Rc::clone(&member_decl.ty),
+                },
+            );
+            if size < member_size {
+                size = member_size;
+            }
+            if align < member_align {
+                align = member_align;
+            }
+        }
+        Rc::new(Type {
+            kind: TypeKind::Struct(members),
+            size: align_to(size, align),
+            align,
+        })
+    }
+
     pub fn is_integer(&self) -> bool {
         matches!(self.kind, TypeKind::Int | TypeKind::Char)
     }
+
     pub fn is_ptr(&self) -> bool {
         matches!(self.kind, TypeKind::Ptr(_) | TypeKind::Array(_, _))
     }
+
     pub fn is_func(&self) -> bool {
         matches!(
             self.kind,
@@ -129,9 +166,15 @@ impl Type {
             }
         )
     }
+
     pub fn is_struct(&self) -> bool {
         matches!(self.kind, TypeKind::Struct(_))
     }
+
+    pub fn is_union(&self) -> bool {
+        matches!(self.kind, TypeKind::Union(_))
+    }
+
     pub fn get_base_ty(&self) -> &Rc<Type> {
         match &self.kind {
             TypeKind::Ptr(base_ty) | TypeKind::Array(base_ty, _) => base_ty,
@@ -215,7 +258,7 @@ impl Context {
             .insert(decl.name.clone(), obj.clone());
         obj
     }
-    fn new_struct_tag(&mut self, tag: &str, ty: &Rc<Type>) {
+    fn new_tag(&mut self, tag: &str, ty: &Rc<Type>) {
         self.tag_scopes
             .last_mut()
             .unwrap()
@@ -244,7 +287,7 @@ impl Context {
         }
         None
     }
-    pub fn find_struct_tag(&self, tag: &str) -> Option<Rc<Type>> {
+    pub fn find_tag(&self, tag: &str) -> Option<Rc<Type>> {
         for tag_scope in self.tag_scopes.iter().rev() {
             if let Some(ty) = tag_scope.get(tag) {
                 return Some(Rc::clone(ty));

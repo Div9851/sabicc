@@ -143,6 +143,7 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "int"
         || tok.text == "char"
         || tok.text == "struct"
+        || tok.text == "union"
     {
         tok.kind = TokenKind::Keyword;
     }
