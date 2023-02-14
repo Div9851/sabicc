@@ -56,14 +56,15 @@ pub struct Stmt {
 
 #[derive(Clone, Copy)]
 pub enum BinaryOp {
-    ADD, // +
-    SUB, // -
-    MUL, // *
-    DIV, // /
-    EQ,  // ==
-    NE,  // !=
-    LT,  // <
-    LE,  // <=
+    ADD,   // +
+    SUB,   // -
+    MUL,   // *
+    DIV,   // /
+    EQ,    // ==
+    NE,    // !=
+    LT,    // <
+    LE,    // <=
+    COMMA, // ,
 }
 
 #[derive(Clone, Copy)]
@@ -137,6 +138,15 @@ impl Expr {
                 let expr = Expr {
                     kind: ExprKind::Binary { op, lhs, rhs },
                     ty: Type::new_int(),
+                    loc,
+                };
+                Ok(Box::new(expr))
+            }
+            BinaryOp::COMMA => {
+                let ty = Rc::clone(&rhs.ty);
+                let expr = Expr {
+                    kind: ExprKind::Binary { op, lhs, rhs },
+                    ty,
                     loc,
                 };
                 Ok(Box::new(expr))
@@ -437,7 +447,7 @@ fn declaration(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         let obj = ctx.new_lvar(&decl);
         if tokenize::consume(tok, "=") {
             let lhs = Expr::new_var(obj, loc);
-            let rhs = expr(tok, ctx)?;
+            let rhs = assign(tok, ctx)?;
             let expr = Expr::new_assign(lhs, rhs, loc);
             let stmt = Box::new(Stmt {
                 kind: StmtKind::ExprStmt(expr),
@@ -588,9 +598,16 @@ fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     Ok(Box::new(stmt))
 }
 
-// expr = assign
+// expr = assign ("," expr)?
 fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
-    assign(tok, ctx)
+    let lhs = assign(tok, ctx)?;
+    if tokenize::equal(tok, ",") {
+        let loc = tok.loc;
+        tokenize::consume(tok, ",");
+        let rhs = expr(tok, ctx)?;
+        return Ok(Expr::new_binary(BinaryOp::COMMA, lhs, rhs, ctx, loc)?);
+    }
+    Ok(lhs)
 }
 
 // assign = equality ("=" assign)?
@@ -788,7 +805,7 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
                 if args.len() > 0 {
                     tokenize::expect(tok, ",", ctx)?;
                 }
-                args.push(expr(tok, ctx)?);
+                args.push(assign(tok, ctx)?);
             }
             return Ok(Expr::new_funcall(ident, args, loc));
         }

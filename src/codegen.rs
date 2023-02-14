@@ -38,26 +38,36 @@ fn store(ty: &Type) -> String {
 // It's an error if a given node does not reside in memory.
 fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
     let mut text = String::new();
-    if let ExprKind::Var(obj) = &expr.kind {
-        match &obj.kind {
-            ObjKind::Local(offset) => {
-                text += &format!("  lea rax, [rbp-{}]\n", offset);
+    match &expr.kind {
+        ExprKind::Var(obj) => {
+            match &obj.kind {
+                ObjKind::Local(offset) => {
+                    text += &format!("  lea rax, [rbp-{}]\n", offset);
+                }
+                ObjKind::Global(name) => {
+                    text += &format!("  lea rax, {}[rip]\n", name);
+                }
             }
-            ObjKind::Global(name) => {
-                text += &format!("  lea rax, {}[rip]\n", name);
-            }
+            return Ok(text);
         }
-        return Ok(text);
+        ExprKind::Unary {
+            op: UnaryOp::DEREF,
+            expr,
+        } => {
+            text += &gen_expr(expr, ctx)?;
+            return Ok(text);
+        }
+        ExprKind::Binary {
+            op: BinaryOp::COMMA,
+            lhs,
+            rhs,
+        } => {
+            text += &gen_expr(lhs, ctx)?;
+            text += &gen_addr(rhs, ctx)?;
+            return Ok(text);
+        }
+        _ => bail!(error_message("not an lvalue", ctx, expr.loc)),
     }
-    if let ExprKind::Unary {
-        op: UnaryOp::DEREF,
-        expr,
-    } = &expr.kind
-    {
-        text += &gen_expr(expr, ctx)?;
-        return Ok(text);
-    }
-    bail!(error_message("not an lvalue", ctx, expr.loc));
 }
 
 fn load(ty: &Type) -> String {
@@ -239,6 +249,14 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             text += &gen_expr(&rhs, ctx)?;
             text += &store(&expr.ty);
         }
+        ExprKind::Binary {
+            op: BinaryOp::COMMA,
+            lhs,
+            rhs,
+        } => {
+            text += &gen_expr(&lhs, ctx)?;
+            text += &gen_expr(&rhs, ctx)?;
+        }
         ExprKind::Binary { op, lhs, rhs } => {
             text += &gen_expr(&rhs, ctx)?;
             text += &push();
@@ -278,6 +296,7 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                     text += "  setle al\n";
                     text += "  movzb rax, al\n";
                 }
+                BinaryOp::COMMA => {}
             };
         }
         ExprKind::Unary { op, expr: operand } => {
