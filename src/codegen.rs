@@ -20,6 +20,14 @@ fn store(ty: &Type) -> String {
     let mut text = String::new();
     text += &pop("rdi");
 
+    if ty.is_struct() || ty.is_union() {
+        for i in 0..ty.size {
+            text += &format!("  mov r8b, [rax+{}]\n", i);
+            text += &format!("  mov [rdi+{}], r8b\n", i);
+        }
+        return text;
+    }
+
     if ty.size == 1 {
         text += "  mov [rdi], al\n";
     } else {
@@ -70,13 +78,13 @@ fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
 }
 
 fn load(ty: &Type) -> String {
-    // If it is an array, do not attempt to load a value to the
-    // register because in general we can't load an entire array to a
-    // register. As a result, the result of an evaluation of an array
-    // becomes not the array itself but the address of the array.
-    // This is where "array is automatically converted to a pointer to
-    // the first element of the array in C" occurs.
-    if let TypeKind::Array(_, _) = ty.kind {
+    if let TypeKind::Array(_, _) | TypeKind::Struct(_) | TypeKind::Union(_) = ty.kind {
+        // If it is an array, do not attempt to load a value to the
+        // register because in general we can't load an entire array to a
+        // register. As a result, the result of an evaluation of an array
+        // becomes not the array itself but the address of the array.
+        // This is where "array is automatically converted to a pointer to
+        // the first element of the array in C" occurs.
         return "".to_owned();
     }
 
