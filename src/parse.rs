@@ -94,7 +94,7 @@ pub enum ExprKind {
         offset: usize,
     },
     Var(Obj),
-    Num(i32),
+    Num(i64),
     FunCall {
         name: String,
         args: Vec<Box<Expr>>,
@@ -116,6 +116,7 @@ impl Expr {
             loc,
         })
     }
+
     fn new_binary(
         op: BinaryOp,
         lhs: Box<Expr>,
@@ -176,7 +177,7 @@ impl Expr {
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
                 rhs,
-                Expr::new_num(lhs.ty.get_base_ty().size as i32, loc),
+                Expr::new_num(lhs.ty.get_base_ty().size as i64, loc),
                 ctx,
                 loc,
             )?;
@@ -207,7 +208,7 @@ impl Expr {
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
                 rhs,
-                Expr::new_num(lhs.ty.get_base_ty().size as i32, loc),
+                Expr::new_num(lhs.ty.get_base_ty().size as i64, loc),
                 ctx,
                 loc,
             )?;
@@ -218,7 +219,7 @@ impl Expr {
         } else {
             // `ptr - ptr`
             // todo: type check
-            div = lhs.ty.get_base_ty().size as i32;
+            div = lhs.ty.get_base_ty().size as i64;
             result_ty = Type::new_int();
         }
         let mut expr = Box::new(Expr {
@@ -293,7 +294,7 @@ impl Expr {
         })
     }
 
-    fn new_num(val: i32, loc: usize) -> Box<Expr> {
+    fn new_num(val: i64, loc: usize) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::Num(val),
             ty: Type::new_int(),
@@ -307,7 +308,7 @@ impl Expr {
                 name: name.to_owned(),
                 args,
             },
-            ty: Type::new_int(),
+            ty: Type::new_long(),
             loc,
         })
     }
@@ -387,18 +388,23 @@ fn is_func(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
 // Returns true if a given token represents a type.
 fn is_typename(tok: &Token) -> bool {
     tokenize::equal(tok, "char")
+        || tokenize::equal(tok, "short")
         || tokenize::equal(tok, "int")
+        || tokenize::equal(tok, "long")
         || tokenize::equal(tok, "struct")
         || tokenize::equal(tok, "union")
 }
 
-// declspec = "char" | "int" | "struct-decl
+// declspec = "char" | "short" | "int" | "long" | "struct-decl
 fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
     if tokenize::consume(tok, "int") {
         return Ok(Type::new_int());
     }
     if tokenize::consume(tok, "char") {
         return Ok(Type::new_char());
+    }
+    if tokenize::consume(tok, "long") {
+        return Ok(Type::new_long());
     }
     if tokenize::consume(tok, "struct") {
         return Ok(struct_decl(tok, ctx)?);
@@ -907,7 +913,7 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 
     if tokenize::consume(tok, "sizeof") {
         let expr = unary(tok, ctx)?;
-        return Ok(Expr::new_num(expr.ty.size as i32, loc));
+        return Ok(Expr::new_num(expr.ty.size as i64, loc));
     }
 
     if let Some(val) = tokenize::consume_number(tok) {

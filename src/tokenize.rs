@@ -6,7 +6,7 @@ pub enum TokenKind {
     Punct,        // Punctuators
     Keyword,      // Keywords
     Str(Vec<u8>), // String literals
-    Num(i32),     // Numeric literals
+    Num(i64),     // Numeric literals
     EOF,          // End-of-file markers
 }
 
@@ -60,7 +60,7 @@ pub fn expect(tok: &mut &Token, op: &str, ctx: &Context) -> Result<()> {
     }
 }
 
-pub fn expect_number(tok: &mut &Token, ctx: &Context) -> Result<i32> {
+pub fn expect_number(tok: &mut &Token, ctx: &Context) -> Result<i64> {
     if let TokenKind::Num(val) = tok.kind {
         *tok = tok.next.as_ref().unwrap();
         Ok(val)
@@ -79,7 +79,7 @@ pub fn expect_ident<'a>(tok: &mut &'a Token, ctx: &Context) -> Result<&'a str> {
     }
 }
 
-pub fn consume_number(tok: &mut &Token) -> Option<i32> {
+pub fn consume_number(tok: &mut &Token) -> Option<i64> {
     if let TokenKind::Num(val) = tok.kind {
         *tok = tok.next.as_ref().unwrap();
         Some(val)
@@ -142,6 +142,8 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "sizeof"
         || tok.text == "int"
         || tok.text == "char"
+        || tok.text == "short"
+        || tok.text == "long"
         || tok.text == "struct"
         || tok.text == "union"
     {
@@ -291,7 +293,7 @@ pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
             while pos < bytes.len() && bytes[pos].is_ascii_digit() {
                 pos += 1;
             }
-            let val = i32::from_str_radix(&text[loc..pos], 10).unwrap();
+            let val = i64::from_str_radix(&text[loc..pos], 10).unwrap();
             let tok = Token::new(TokenKind::Num(val), loc, &text[loc..pos]);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
