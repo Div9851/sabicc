@@ -353,7 +353,15 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<B
     let loc = tok.loc;
     let decl = declarator(tok, base_ty, ctx)?;
     ctx.new_gvar(&decl);
-    if let TypeKind::Func { params, return_ty } = &decl.ty.kind {
+    if let TypeKind::Func {
+        params: param_decls,
+        return_ty,
+    } = &decl.ty.kind
+    {
+        let mut params = Vec::new();
+        for param_decl in param_decls {
+            params.push(ctx.new_lvar(&param_decl));
+        }
         let body = compound_stmt(tok, ctx)?;
         ctx.leave_scope();
         ctx.stack_size = align_to(ctx.stack_size, 16);
@@ -510,12 +518,7 @@ fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
 //             = ε
 fn type_suffix(tok: &mut &Token, ty: &Rc<Type>, ctx: &mut Context) -> Result<Rc<Type>> {
     if tokenize::equal(tok, "(") {
-        let param_decls = func_params(tok, ctx)?;
-        let mut params = Vec::new();
-        for param_decl in param_decls {
-            let param = ctx.new_lvar(&param_decl);
-            params.push(param);
-        }
+        let params = func_params(tok, ctx)?;
         Ok(Type::new_func(params, ty))
     } else if tokenize::equal(tok, "[") {
         tokenize::expect(tok, "[", ctx)?;
@@ -528,11 +531,19 @@ fn type_suffix(tok: &mut &Token, ty: &Rc<Type>, ctx: &mut Context) -> Result<Rc<
     }
 }
 
-// declarator = "*"* ident type-suffix
+// declarator = "*"* ("(" declarator ")" | ident) type-suffix
 fn declarator(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<Decl> {
     let mut ty = Rc::clone(base_ty);
     while tokenize::consume(tok, "*") {
         ty = Type::new_ptr(&ty);
+    }
+    if tokenize::consume(tok, "(") {
+        let dummy = Type::new_int();
+        let mut cur = *tok;
+        declarator(tok, &dummy, ctx)?;
+        tokenize::expect(tok, ")", ctx)?;
+        ty = type_suffix(tok, &ty, ctx)?;
+        return declarator(&mut cur, &ty, ctx);
     }
     if !matches!(tok.kind, TokenKind::Ident) {
         bail!(error_message("expected an identifier", ctx, tok.loc));

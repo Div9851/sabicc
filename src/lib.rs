@@ -36,7 +36,7 @@ pub enum TypeKind {
     Ptr(Rc<Type>),
     Array(Rc<Type>, usize),
     Func {
-        params: Vec<Obj>,
+        params: Vec<Decl>,
         return_ty: Rc<Type>,
     },
     Struct(HashMap<String, Member>),
@@ -102,7 +102,7 @@ impl Type {
         })
     }
 
-    fn new_func(params: Vec<Obj>, return_ty: &Rc<Type>) -> Rc<Type> {
+    fn new_func(params: Vec<Decl>, return_ty: &Rc<Type>) -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Func {
                 params,
