@@ -42,7 +42,8 @@ pub enum TypeKind {
 
 pub struct Type {
     pub kind: TypeKind,
-    pub size: usize,
+    pub size: usize,  // sizeof() value
+    pub align: usize, // alignment
 }
 
 impl Type {
@@ -50,12 +51,14 @@ impl Type {
         Rc::new(Type {
             kind: TypeKind::Int,
             size: 8,
+            align: 8,
         })
     }
     fn new_char() -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Char,
             size: 1,
+            align: 1,
         })
     }
     fn new_str(len: usize) -> Rc<Type> {
@@ -65,12 +68,14 @@ impl Type {
         Rc::new(Type {
             kind: TypeKind::Ptr(Rc::clone(base_ty)),
             size: 8,
+            align: 8,
         })
     }
     fn new_array(base_ty: &Rc<Type>, len: usize) -> Rc<Type> {
         Rc::new(Type {
             kind: TypeKind::Array(Rc::clone(base_ty), len),
             size: base_ty.size * len,
+            align: base_ty.align,
         })
     }
     fn new_func(params: Vec<Decl>, return_ty: &Rc<Type>) -> Rc<Type> {
@@ -80,13 +85,17 @@ impl Type {
                 return_ty: Rc::clone(return_ty),
             },
             size: 0,
+            align: 0,
         })
     }
     fn new_struct(member_decls: Vec<Decl>) -> Rc<Type> {
         let mut members = HashMap::new();
         let mut offset = 0;
+        let mut align = 1;
         for member_decl in member_decls {
-            let size = member_decl.ty.size;
+            let member_size = member_decl.ty.size;
+            let member_align = member_decl.ty.align;
+            offset = align_to(offset, align);
             members.insert(
                 member_decl.name,
                 Member {
@@ -94,11 +103,15 @@ impl Type {
                     ty: Rc::clone(&member_decl.ty),
                 },
             );
-            offset += size;
+            offset += member_size;
+            if align < member_align {
+                align = member_align;
+            }
         }
         Rc::new(Type {
             kind: TypeKind::Struct(members),
-            size: offset,
+            size: align_to(offset, align),
+            align,
         })
     }
     pub fn is_integer(&self) -> bool {
@@ -238,4 +251,10 @@ fn error_message(msg: &str, ctx: &Context, pos: usize) -> String {
         " ".repeat(info.len() + pos - line_start_pos),
         msg
     )
+}
+
+// Round up `n` to the nearest multiple of `align`. For instance,
+// align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
+fn align_to(n: usize, align: usize) -> usize {
+    (n + align - 1) / align * align
 }

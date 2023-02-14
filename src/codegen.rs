@@ -1,17 +1,11 @@
 use crate::parse::{BinaryOp, Expr, ExprKind, Func, Program, Stmt, StmtKind, UnaryOp};
-use crate::{error_message, Context, Obj, ObjKind, Type, TypeKind};
+use crate::{align_to, error_message, Context, Obj, ObjKind, Type, TypeKind};
 
 use anyhow::{bail, Result};
 use std::unreachable;
 
 static ARGREG64: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 static ARGREG8: [&'static str; 6] = ["dil", "sil", "dl", "cl", "r8b", "r9b"];
-
-// Round up `n` to the nearest multiple of `align`. For instance,
-// align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
-fn align_to(n: usize, align: usize) -> usize {
-    (n + align - 1) / align * align
-}
 
 fn push() -> String {
     "  push rax\n".to_owned()
