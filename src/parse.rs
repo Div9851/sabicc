@@ -417,6 +417,8 @@ fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
     const OTHER: usize = 1 << 10;
     const SHORT_INT: usize = SHORT + INT;
     const LONG_INT: usize = LONG + INT;
+    const LONG_LONG: usize = LONG + LONG;
+    const LONG_LONG_INT: usize = LONG + LONG + INT;
 
     let mut ty = Type::new_int();
     let mut counter = 0;
@@ -461,7 +463,7 @@ fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
             INT => {
                 ty = Type::new_int();
             }
-            LONG | LONG_INT => {
+            LONG | LONG_INT | LONG_LONG | LONG_LONG_INT => {
                 ty = Type::new_long();
             }
             _ => {
