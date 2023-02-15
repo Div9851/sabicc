@@ -407,30 +407,69 @@ fn is_typename(tok: &Token) -> bool {
         || tokenize::equal(tok, "union")
 }
 
-// declspec = "void" | "char" | "short" | "int" | "long" | "struct-decl
+// declspec = ("void" | "char" | "short" | "int" | "long" | struct-decl)+
 fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
-    if tokenize::consume(tok, "void") {
-        return Ok(Type::new_void());
+    const VOID: usize = 1 << 0;
+    const CHAR: usize = 1 << 2;
+    const SHORT: usize = 1 << 4;
+    const INT: usize = 1 << 6;
+    const LONG: usize = 1 << 8;
+    const OTHER: usize = 1 << 10;
+    const SHORT_INT: usize = SHORT + INT;
+    const LONG_INT: usize = LONG + INT;
+
+    let mut ty = Type::new_int();
+    let mut counter = 0;
+    while is_typename(tok) {
+        // Handle user-defined types.
+        if tokenize::equal(tok, "struct") || tokenize::equal(tok, "union") {
+            if tokenize::consume(tok, "struct") {
+                ty = struct_decl(tok, ctx)?;
+            } else {
+                tokenize::consume(tok, "union");
+                ty = union_decl(tok, ctx)?;
+            }
+            counter += OTHER;
+            continue;
+        }
+        // Handle built-in types.
+        if tokenize::consume(tok, "void") {
+            counter += VOID;
+        }
+        if tokenize::consume(tok, "char") {
+            counter += CHAR;
+        }
+        if tokenize::consume(tok, "short") {
+            counter += SHORT;
+        }
+        if tokenize::consume(tok, "int") {
+            counter += INT;
+        }
+        if tokenize::consume(tok, "long") {
+            counter += LONG;
+        }
+        match counter {
+            VOID => {
+                ty = Type::new_void();
+            }
+            CHAR => {
+                ty = Type::new_char();
+            }
+            SHORT | SHORT_INT => {
+                ty = Type::new_short();
+            }
+            INT => {
+                ty = Type::new_int();
+            }
+            LONG | LONG_INT => {
+                ty = Type::new_long();
+            }
+            _ => {
+                bail!(error_message("invalid type", ctx, tok.loc));
+            }
+        }
     }
-    if tokenize::consume(tok, "char") {
-        return Ok(Type::new_char());
-    }
-    if tokenize::consume(tok, "short") {
-        return Ok(Type::new_short());
-    }
-    if tokenize::consume(tok, "int") {
-        return Ok(Type::new_int());
-    }
-    if tokenize::consume(tok, "long") {
-        return Ok(Type::new_long());
-    }
-    if tokenize::consume(tok, "struct") {
-        return Ok(struct_decl(tok, ctx)?);
-    }
-    if tokenize::consume(tok, "union") {
-        return Ok(union_decl(tok, ctx)?);
-    }
-    bail!(error_message("typename expected", ctx, tok.loc));
+    Ok(ty)
 }
 
 // struct-members = "{" (declspec declarator ("," declarator)* ";")* "}"
