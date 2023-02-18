@@ -1,9 +1,12 @@
 use anyhow::{bail, Result};
+use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 
 use crate::tokenize::{self, Token, TokenKind};
-use crate::{align_to, error_message, Context, Decl, Obj, Type, TypeKind};
+use crate::{
+    align_to, error_message, Context, Decl, DeclSpec, Obj, ObjKind, Type, TypeKind, VarAttr,
+};
 
 pub struct Program {
     pub functions: Vec<Box<Func>>,
@@ -20,7 +23,7 @@ impl Program {
 
 pub struct Func {
     pub name: String,
-    pub return_ty: Rc<Type>,
+    pub return_ty: Rc<RefCell<Type>>,
     pub params: Vec<Obj>,
     pub body: Box<Stmt>,
     pub stack_size: usize,
@@ -103,7 +106,7 @@ pub enum ExprKind {
 
 pub struct Expr {
     pub kind: ExprKind,
-    pub ty: Rc<Type>,
+    pub ty: Rc<RefCell<Type>>,
     pub loc: usize,
 }
 
@@ -128,7 +131,7 @@ impl Expr {
             BinaryOp::ADD => Expr::new_add(lhs, rhs, ctx, loc),
             BinaryOp::SUB => Expr::new_sub(lhs, rhs, ctx, loc),
             BinaryOp::MUL | BinaryOp::DIV => {
-                if lhs.ty.is_integer() && rhs.ty.is_integer() {
+                if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
                     let expr = Expr {
                         kind: ExprKind::Binary { op, lhs, rhs },
                         ty: Type::new_int(),
@@ -165,19 +168,19 @@ impl Expr {
         ctx: &Context,
         loc: usize,
     ) -> Result<Box<Expr>> {
-        if lhs.ty.is_integer() && rhs.ty.is_ptr() {
+        if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_ptr() {
             mem::swap(&mut lhs, &mut rhs);
         }
         let result_ty;
-        if lhs.ty.is_integer() && rhs.ty.is_integer() {
+        if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
             // `int + int`
             result_ty = Type::new_int();
-        } else if lhs.ty.is_ptr() && rhs.ty.is_integer() {
+        } else if lhs.ty.borrow().is_ptr() && rhs.ty.borrow().is_integer() {
             // `ptr + int`
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
                 rhs,
-                Expr::new_num(lhs.ty.get_base_ty().size as i64, loc),
+                Expr::new_num(lhs.ty.borrow().get_base_ty().borrow().size as i64, loc),
                 ctx,
                 loc,
             )?;
@@ -200,26 +203,26 @@ impl Expr {
     fn new_sub(lhs: Box<Expr>, mut rhs: Box<Expr>, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
         let result_ty;
         let mut div = 1;
-        if lhs.ty.is_integer() && rhs.ty.is_integer() {
+        if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
             // `int - int`
             result_ty = Type::new_int();
-        } else if lhs.ty.is_ptr() && rhs.ty.is_integer() {
+        } else if lhs.ty.borrow().is_ptr() && rhs.ty.borrow().is_integer() {
             // `ptr - int`
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
                 rhs,
-                Expr::new_num(lhs.ty.get_base_ty().size as i64, loc),
+                Expr::new_num(lhs.ty.borrow().get_base_ty().borrow().size as i64, loc),
                 ctx,
                 loc,
             )?;
             result_ty = Rc::clone(&lhs.ty);
-        } else if lhs.ty.is_integer() && rhs.ty.is_ptr() {
+        } else if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_ptr() {
             // `int - ptr`
             bail!(error_message("invalid operands", ctx, loc));
         } else {
             // `ptr - ptr`
             // todo: type check
-            div = lhs.ty.get_base_ty().size as i64;
+            div = lhs.ty.borrow().get_base_ty().borrow().size as i64;
             result_ty = Type::new_int();
         }
         let mut expr = Box::new(Expr {
@@ -241,20 +244,20 @@ impl Expr {
         let result_ty;
         match op {
             UnaryOp::NEG => {
-                if expr.ty.is_integer() {
+                if expr.ty.borrow().is_integer() {
                     result_ty = Type::new_int();
                 } else {
                     bail!(error_message("invalid operand", ctx, loc));
                 }
             }
             UnaryOp::DEREF => {
-                if expr.ty.is_ptr() {
-                    if let TypeKind::Ptr(base_ty) = &expr.ty.kind {
-                        if base_ty.is_void() {
+                if expr.ty.borrow().is_ptr() {
+                    if let TypeKind::Ptr(base_ty) = &expr.ty.borrow().kind {
+                        if base_ty.borrow().is_void() {
                             bail!(error_message("dereferencing a void pointer", ctx, loc));
                         }
                     }
-                    result_ty = Rc::clone(expr.ty.get_base_ty());
+                    result_ty = Rc::clone(expr.ty.borrow().get_base_ty());
                 } else {
                     bail!(error_message("invalid pointer dereference", ctx, loc));
                 }
@@ -273,7 +276,7 @@ impl Expr {
     fn new_member(expr: Box<Expr>, name: &str, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
         let offset;
         let ty;
-        if let TypeKind::Struct(members) | TypeKind::Union(members) = &expr.ty.kind {
+        if let TypeKind::Struct(members) | TypeKind::Union(members) = &expr.ty.borrow().kind {
             if let Some(member) = members.get(name) {
                 offset = member.offset;
                 ty = Rc::clone(&member.ty);
@@ -325,21 +328,25 @@ pub fn program(text: String, filename: &str) -> Result<Program> {
     let mut tok = head.as_ref();
     program.ctx.enter_scope();
     while !tokenize::at_eof(tok) {
-        let base_ty = declspec(&mut tok, &mut program.ctx)?;
+        let spec = declspec(&mut tok, &mut program.ctx, true)?;
         // Function
         if is_function_definition(&mut tok, &mut program.ctx)? {
             program
                 .functions
-                .push(function(&mut tok, &base_ty, &mut program.ctx)?);
+                .push(function(&mut tok, &spec.ty, &mut program.ctx)?);
             continue;
         }
         // Global variable or function declaration
-        global_variable(&mut tok, &base_ty, &mut program.ctx)?;
+        if spec.attr.is_typedef {
+            parse_typedef(&mut tok, &spec.ty, &mut program.ctx)?;
+            continue;
+        }
+        global_variable(&mut tok, &spec.ty, &mut program.ctx)?;
     }
     Ok(program)
 }
 
-fn global_variable(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<()> {
+fn global_variable(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<()> {
     let mut first = true;
     while !tokenize::consume(tok, ";") {
         if !first {
@@ -352,16 +359,21 @@ fn global_variable(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> R
     Ok(())
 }
 
-pub fn function(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<Box<Func>> {
+pub fn function(
+    tok: &mut &Token,
+    base_ty: &Rc<RefCell<Type>>,
+    ctx: &mut Context,
+) -> Result<Box<Func>> {
     ctx.stack_size = 0;
     ctx.enter_scope();
     let loc = tok.loc;
     let decl = declarator(tok, base_ty, ctx)?;
+    let ty = decl.ty.borrow();
     ctx.new_gvar(&decl);
     if let TypeKind::Func {
         params: param_decls,
         return_ty,
-    } = &decl.ty.kind
+    } = &ty.kind
     {
         let mut params = Vec::new();
         for param_decl in param_decls {
@@ -393,11 +405,17 @@ fn is_function_definition(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
     ctx.enter_scope();
     let decl = declarator(&mut cur, &dummy, ctx)?;
     ctx.leave_scope();
-    Ok(decl.ty.is_func() && !tokenize::equal(cur, ";"))
+    Ok(decl.ty.borrow().is_func() && !tokenize::equal(cur, ";"))
 }
 
 // Returns true if a given token represents a type.
-fn is_typename(tok: &Token) -> bool {
+fn is_typename(tok: &Token, ctx: &Context) -> bool {
+    if matches!(tok.kind, TokenKind::Ident) {
+        if let Some(obj) = ctx.find_var(&tok.text) {
+            return matches!(obj.kind, ObjKind::TypeDef);
+        }
+        return false;
+    }
     tokenize::equal(tok, "void")
         || tokenize::equal(tok, "char")
         || tokenize::equal(tok, "short")
@@ -405,10 +423,13 @@ fn is_typename(tok: &Token) -> bool {
         || tokenize::equal(tok, "long")
         || tokenize::equal(tok, "struct")
         || tokenize::equal(tok, "union")
+        || tokenize::equal(tok, "typedef")
 }
 
-// declspec = ("void" | "char" | "short" | "int" | "long" | struct-decl)+
-fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
+// declspec = ("void" | "char" | "short" | "int" | "long" |
+//             | "typedef"
+//             | struct-decl | union-decl | typedef-name)+
+fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<DeclSpec> {
     const VOID: usize = 1 << 0;
     const CHAR: usize = 1 << 2;
     const SHORT: usize = 1 << 4;
@@ -422,14 +443,37 @@ fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
 
     let mut ty = Type::new_int();
     let mut counter = 0;
-    while is_typename(tok) {
+    let mut attr = VarAttr { is_typedef: false };
+    while is_typename(tok, ctx) {
+        // Handle "typedef" keyword
+        if tokenize::equal(tok, "typedef") {
+            if !accept_attr {
+                bail!(error_message(
+                    "storage class specifier is not allowed in this context",
+                    ctx,
+                    tok.loc,
+                ));
+            }
+            tokenize::consume(tok, "typedef");
+            attr.is_typedef = true;
+            continue;
+        }
         // Handle user-defined types.
-        if tokenize::equal(tok, "struct") || tokenize::equal(tok, "union") {
+        if tokenize::equal(tok, "struct")
+            || tokenize::equal(tok, "union")
+            || matches!(tok.kind, TokenKind::Ident)
+        {
+            if counter > 0 {
+                break;
+            }
             if tokenize::consume(tok, "struct") {
                 ty = struct_decl(tok, ctx)?;
-            } else {
+            } else if tokenize::consume(tok, "union") {
                 tokenize::consume(tok, "union");
                 ty = union_decl(tok, ctx)?;
+            } else {
+                let ident = tokenize::consume_ident(tok).unwrap();
+                ty = ctx.find_var(ident).unwrap().ty;
             }
             counter += OTHER;
             continue;
@@ -471,7 +515,7 @@ fn declspec(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
             }
         }
     }
-    Ok(ty)
+    Ok(DeclSpec { ty, attr })
 }
 
 // struct-members = "{" (declspec declarator ("," declarator)* ";")* "}"
@@ -479,14 +523,14 @@ fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
     tokenize::expect(tok, "{", ctx)?;
     let mut member_decls = Vec::new();
     while !tokenize::consume(tok, "}") {
-        let base_ty = declspec(tok, ctx)?;
+        let spec = declspec(tok, ctx, false)?;
         let mut first = true;
         while !tokenize::consume(tok, ";") {
             if !first {
                 tokenize::expect(tok, ",", ctx)?;
             }
             first = false;
-            let member_decl = declarator(tok, &base_ty, ctx)?;
+            let member_decl = declarator(tok, &spec.ty, ctx)?;
             member_decls.push(member_decl);
         }
     }
@@ -494,13 +538,13 @@ fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
 }
 
 // union-decl = ident | ident? struct-members
-fn union_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
+fn union_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
     let loc = tok.loc;
     let tag = tokenize::consume_ident(tok);
     if tag.is_some() && !tokenize::equal(tok, "{") {
         let tag = tag.unwrap();
         if let Some(ty) = ctx.find_tag(tag) {
-            if !ty.is_union() {
+            if !ty.borrow().is_union() {
                 bail!(error_message(
                     &format!("'{}' defined as wrong kind of tag", tag),
                     ctx,
@@ -520,13 +564,13 @@ fn union_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
 }
 
 // struct-decl = ident | ident? struct-members
-fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<Type>> {
+fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
     let loc = tok.loc;
     let tag = tokenize::consume_ident(tok);
     if tag.is_some() && !tokenize::equal(tok, "{") {
         let tag = tag.unwrap();
         if let Some(ty) = ctx.find_tag(tag) {
-            if !ty.is_struct() {
+            if !ty.borrow().is_struct() {
                 bail!(error_message(
                     &format!("'{}' defined as wrong kind of tag", tag),
                     ctx,
@@ -554,8 +598,8 @@ fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
         if params.len() > 0 {
             tokenize::expect(tok, ",", ctx)?;
         }
-        let param_base_ty = declspec(tok, ctx)?;
-        let param = declarator(tok, &param_base_ty, ctx)?;
+        let spec = declspec(tok, ctx, false)?;
+        let param = declarator(tok, &spec.ty, ctx)?;
         params.push(param);
     }
     Ok(params)
@@ -564,7 +608,11 @@ fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
 // type-suffix = func-params
 //             = "[" num "]" type-suffix
 //             = ε
-fn type_suffix(tok: &mut &Token, ty: &Rc<Type>, ctx: &mut Context) -> Result<Rc<Type>> {
+fn type_suffix(
+    tok: &mut &Token,
+    ty: &Rc<RefCell<Type>>,
+    ctx: &mut Context,
+) -> Result<Rc<RefCell<Type>>> {
     if tokenize::equal(tok, "(") {
         let params = func_params(tok, ctx)?;
         Ok(Type::new_func(params, ty))
@@ -580,7 +628,7 @@ fn type_suffix(tok: &mut &Token, ty: &Rc<Type>, ctx: &mut Context) -> Result<Rc<
 }
 
 // declarator = "*"* ("(" declarator ")" | ident) type-suffix
-fn declarator(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result<Decl> {
+fn declarator(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<Decl> {
     let mut ty = Rc::clone(base_ty);
     while tokenize::consume(tok, "*") {
         ty = Type::new_ptr(&ty);
@@ -607,10 +655,28 @@ fn declarator(tok: &mut &Token, base_ty: &Rc<Type>, ctx: &mut Context) -> Result
     }
 }
 
+fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<()> {
+    let mut first = true;
+
+    while !tokenize::consume(tok, ";") {
+        if !first {
+            tokenize::consume(tok, ",");
+        }
+        first = false;
+
+        let decl = declarator(tok, base_ty, ctx)?;
+        ctx.new_typedef(&decl);
+    }
+    Ok(())
+}
+
 // declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
-fn declaration(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+fn declaration(
+    tok: &mut &Token,
+    ctx: &mut Context,
+    base_ty: &Rc<RefCell<Type>>,
+) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    let base_ty = declspec(tok, ctx)?;
     let mut stmt_vec = Vec::new();
     let mut count = 0;
     while !tokenize::consume(tok, ";") {
@@ -618,8 +684,8 @@ fn declaration(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
             tokenize::expect(tok, ",", ctx)?;
         }
         let loc = tok.loc;
-        let decl = declarator(tok, &base_ty, ctx)?;
-        if decl.ty.is_void() {
+        let decl = declarator(tok, base_ty, ctx)?;
+        if decl.ty.borrow().is_void() {
             bail!(error_message("variable declared void", ctx, loc));
         }
         let obj = ctx.new_lvar(&decl);
@@ -650,8 +716,16 @@ fn declaration(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
 //      | expr-stmt
 //      | null-stmt
 fn stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
-    if is_typename(tok) {
-        Ok(declaration(tok, ctx)?)
+    if is_typename(tok, ctx) {
+        let spec = declspec(tok, ctx, true)?;
+        if spec.attr.is_typedef {
+            parse_typedef(tok, &spec.ty, ctx)?;
+            return Ok(Box::new(Stmt {
+                kind: StmtKind::NullStmt,
+                loc: tok.loc,
+            }));
+        }
+        Ok(declaration(tok, ctx, &spec.ty)?)
     } else if tokenize::equal(tok, ";") {
         Ok(null_stmt(tok, ctx)?)
     } else if tokenize::equal(tok, "return") {
@@ -978,7 +1052,7 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 
     if tokenize::consume(tok, "sizeof") {
         let expr = unary(tok, ctx)?;
-        return Ok(Expr::new_num(expr.ty.size as i64, loc));
+        return Ok(Expr::new_num(expr.ty.borrow().size as i64, loc));
     }
 
     if let Some(val) = tokenize::consume_number(tok) {
@@ -999,6 +1073,9 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         }
         // Variable
         if let Some(obj) = ctx.find_var(&ident) {
+            if matches!(obj.kind, ObjKind::TypeDef) {
+                bail!(error_message("undefined variable", ctx, loc));
+            }
             return Ok(Expr::new_var(obj, loc));
         } else {
             bail!(error_message("undefined variable", ctx, loc));

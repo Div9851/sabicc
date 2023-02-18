@@ -2,6 +2,7 @@ pub mod codegen;
 pub mod parse;
 pub mod tokenize;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -9,23 +10,33 @@ use std::rc::Rc;
 pub enum ObjKind {
     Local(usize),   // offset from RBP
     Global(String), // label
+    TypeDef,
 }
 
 #[derive(Clone)]
 pub struct Obj {
     pub kind: ObjKind,
-    pub ty: Rc<Type>,
+    pub ty: Rc<RefCell<Type>>,
 }
 
 pub struct Member {
     pub offset: usize,
-    pub ty: Rc<Type>,
+    pub ty: Rc<RefCell<Type>>,
 }
 
 #[derive(Clone)]
 pub struct Decl {
     pub name: String,
-    pub ty: Rc<Type>,
+    pub ty: Rc<RefCell<Type>>,
+}
+
+pub struct VarAttr {
+    pub is_typedef: bool,
+}
+
+pub struct DeclSpec {
+    pub ty: Rc<RefCell<Type>>,
+    pub attr: VarAttr,
 }
 
 pub enum TypeKind {
@@ -34,11 +45,11 @@ pub enum TypeKind {
     Short,
     Int,
     Long,
-    Ptr(Rc<Type>),
-    Array(Rc<Type>, usize),
+    Ptr(Rc<RefCell<Type>>),
+    Array(Rc<RefCell<Type>>, usize),
     Func {
         params: Vec<Decl>,
-        return_ty: Rc<Type>,
+        return_ty: Rc<RefCell<Type>>,
     },
     Struct(HashMap<String, Member>),
     Union(HashMap<String, Member>),
@@ -51,84 +62,84 @@ pub struct Type {
 }
 
 impl Type {
-    fn new_void() -> Rc<Type> {
-        Rc::new(Type {
+    fn new_void() -> Rc<RefCell<Type>> {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Void,
             size: 1,
             align: 1,
-        })
+        }))
     }
 
-    fn new_char() -> Rc<Type> {
-        Rc::new(Type {
+    fn new_char() -> Rc<RefCell<Type>> {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Char,
             size: 1,
             align: 1,
-        })
+        }))
     }
 
-    fn new_short() -> Rc<Type> {
-        Rc::new(Type {
+    fn new_short() -> Rc<RefCell<Type>> {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Short,
             size: 2,
             align: 2,
-        })
+        }))
     }
 
-    fn new_int() -> Rc<Type> {
-        Rc::new(Type {
+    fn new_int() -> Rc<RefCell<Type>> {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Int,
             size: 4,
             align: 4,
-        })
+        }))
     }
 
-    fn new_long() -> Rc<Type> {
-        Rc::new(Type {
+    fn new_long() -> Rc<RefCell<Type>> {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Char,
             size: 8,
             align: 8,
-        })
+        }))
     }
 
-    fn new_str(len: usize) -> Rc<Type> {
+    fn new_str(len: usize) -> Rc<RefCell<Type>> {
         Type::new_array(&Type::new_char(), len)
     }
 
-    fn new_ptr(base_ty: &Rc<Type>) -> Rc<Type> {
-        Rc::new(Type {
+    fn new_ptr(base_ty: &Rc<RefCell<Type>>) -> Rc<RefCell<Type>> {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Ptr(Rc::clone(base_ty)),
             size: 8,
             align: 8,
-        })
+        }))
     }
 
-    fn new_array(base_ty: &Rc<Type>, len: usize) -> Rc<Type> {
-        Rc::new(Type {
+    fn new_array(base_ty: &Rc<RefCell<Type>>, len: usize) -> Rc<RefCell<Type>> {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Array(Rc::clone(base_ty), len),
-            size: base_ty.size * len,
-            align: base_ty.align,
-        })
+            size: base_ty.borrow().size * len,
+            align: base_ty.borrow().align,
+        }))
     }
 
-    fn new_func(params: Vec<Decl>, return_ty: &Rc<Type>) -> Rc<Type> {
-        Rc::new(Type {
+    fn new_func(params: Vec<Decl>, return_ty: &Rc<RefCell<Type>>) -> Rc<RefCell<Type>> {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Func {
                 params,
                 return_ty: Rc::clone(return_ty),
             },
             size: 0,
             align: 0,
-        })
+        }))
     }
 
-    fn new_struct(member_decls: Vec<Decl>) -> Rc<Type> {
+    fn new_struct(member_decls: Vec<Decl>) -> Rc<RefCell<Type>> {
         let mut members = HashMap::new();
         let mut offset = 0;
         let mut align = 1;
         for member_decl in member_decls {
-            let member_size = member_decl.ty.size;
-            let member_align = member_decl.ty.align;
+            let member_size = member_decl.ty.borrow().size;
+            let member_align = member_decl.ty.borrow().align;
             offset = align_to(offset, align);
             members.insert(
                 member_decl.name,
@@ -142,20 +153,20 @@ impl Type {
                 align = member_align;
             }
         }
-        Rc::new(Type {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Struct(members),
             size: align_to(offset, align),
             align,
-        })
+        }))
     }
 
-    fn new_union(member_decls: Vec<Decl>) -> Rc<Type> {
+    fn new_union(member_decls: Vec<Decl>) -> Rc<RefCell<Type>> {
         let mut members = HashMap::new();
         let mut size = 0;
         let mut align = 1;
         for member_decl in member_decls {
-            let member_size = member_decl.ty.size;
-            let member_align = member_decl.ty.align;
+            let member_size = member_decl.ty.borrow().size;
+            let member_align = member_decl.ty.borrow().align;
             members.insert(
                 member_decl.name,
                 Member {
@@ -170,11 +181,11 @@ impl Type {
                 align = member_align;
             }
         }
-        Rc::new(Type {
+        Rc::new(RefCell::new(Type {
             kind: TypeKind::Union(members),
             size: align_to(size, align),
             align,
-        })
+        }))
     }
 
     pub fn is_void(&self) -> bool {
@@ -210,7 +221,7 @@ impl Type {
         matches!(self.kind, TypeKind::Union(_))
     }
 
-    pub fn get_base_ty(&self) -> &Rc<Type> {
+    pub fn get_base_ty(&self) -> &Rc<RefCell<Type>> {
         match &self.kind {
             TypeKind::Ptr(base_ty) | TypeKind::Array(base_ty, _) => base_ty,
             _ => panic!("try to get base_ty of a non pointer type"),
@@ -225,7 +236,7 @@ pub struct Context {
     pub line_start_pos: Vec<usize>,
     pub line_end_pos: Vec<usize>,
     pub scopes: Vec<HashMap<String, Obj>>,
-    pub tag_scopes: Vec<HashMap<String, Rc<Type>>>,
+    pub tag_scopes: Vec<HashMap<String, Rc<RefCell<Type>>>>,
     pub init_data: HashMap<String, Vec<u8>>,
     pub id: usize,
     pub stack_size: usize,
@@ -261,17 +272,20 @@ impl Context {
             stack_size: 0,
         }
     }
+
     pub fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
         self.tag_scopes.push(HashMap::new());
     }
+
     pub fn leave_scope(&mut self) {
         self.scopes.pop();
         self.tag_scopes.pop();
     }
+
     pub fn new_lvar(&mut self, decl: &Decl) -> Obj {
-        self.stack_size += decl.ty.size;
-        self.stack_size = align_to(self.stack_size, decl.ty.align);
+        self.stack_size += decl.ty.borrow().size;
+        self.stack_size = align_to(self.stack_size, decl.ty.borrow().align);
         let obj = Obj {
             kind: ObjKind::Local(self.stack_size),
             ty: Rc::clone(&decl.ty),
@@ -282,6 +296,7 @@ impl Context {
             .insert(decl.name.clone(), obj.clone());
         obj
     }
+
     fn new_gvar(&mut self, decl: &Decl) -> Obj {
         let obj = Obj {
             kind: ObjKind::Global(decl.name.clone()),
@@ -293,17 +308,32 @@ impl Context {
             .insert(decl.name.clone(), obj.clone());
         obj
     }
-    fn new_tag(&mut self, tag: &str, ty: &Rc<Type>) {
+
+    fn new_typedef(&mut self, decl: &Decl) -> Obj {
+        let obj = Obj {
+            kind: ObjKind::TypeDef,
+            ty: Rc::clone(&decl.ty),
+        };
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .insert(decl.name.clone(), obj.clone());
+        obj
+    }
+
+    fn new_tag(&mut self, tag: &str, ty: &Rc<RefCell<Type>>) {
         self.tag_scopes
             .last_mut()
             .unwrap()
             .insert(tag.to_owned(), Rc::clone(ty));
     }
+
     fn new_unique_name(&mut self) -> String {
         let name = format!(".L..{}", self.id);
         self.id += 1;
         name
     }
+
     fn new_str(&mut self, bytes: Vec<u8>) -> Obj {
         let name = self.new_unique_name();
         let decl = Decl {
@@ -314,7 +344,8 @@ impl Context {
         self.init_data.insert(name, bytes);
         obj
     }
-    pub fn find_var(&mut self, name: &str) -> Option<Obj> {
+
+    pub fn find_var(&self, name: &str) -> Option<Obj> {
         for scope in self.scopes.iter().rev() {
             if let Some(obj) = scope.get(name) {
                 return Some(obj.clone());
@@ -322,7 +353,8 @@ impl Context {
         }
         None
     }
-    pub fn find_tag(&self, tag: &str) -> Option<Rc<Type>> {
+
+    pub fn find_tag(&self, tag: &str) -> Option<Rc<RefCell<Type>>> {
         for tag_scope in self.tag_scopes.iter().rev() {
             if let Some(ty) = tag_scope.get(tag) {
                 return Some(Rc::clone(ty));

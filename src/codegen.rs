@@ -2,6 +2,7 @@ use crate::parse::{BinaryOp, Expr, ExprKind, Func, Program, Stmt, StmtKind, Unar
 use crate::{error_message, Context, Obj, ObjKind, Type, TypeKind};
 
 use anyhow::{bail, Result};
+use std::cell::RefCell;
 use std::unreachable;
 
 static ARGREG64: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -18,23 +19,23 @@ fn pop(reg: &str) -> String {
 }
 
 // Store rax to an address that the stack top is pointing to.
-fn store(ty: &Type) -> String {
+fn store(ty: &RefCell<Type>) -> String {
     let mut text = String::new();
     text += &pop("rdi");
 
-    if ty.is_struct() || ty.is_union() {
-        for i in 0..ty.size {
+    if ty.borrow().is_struct() || ty.borrow().is_union() {
+        for i in 0..ty.borrow().size {
             text += &format!("  mov r8b, [rax+{}]\n", i);
             text += &format!("  mov [rdi+{}], r8b\n", i);
         }
         return text;
     }
 
-    if ty.size == 1 {
+    if ty.borrow().size == 1 {
         text += "  mov [rdi], al\n";
-    } else if ty.size == 2 {
+    } else if ty.borrow().size == 2 {
         text += "  mov [rdi], ax\n";
-    } else if ty.size == 4 {
+    } else if ty.borrow().size == 4 {
         text += "   mov [rdi], eax\n";
     } else {
         text += "  mov [rdi], rax\n";
@@ -54,6 +55,9 @@ fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                 }
                 ObjKind::Global(name) => {
                     text += &format!("  lea rax, {}[rip]\n", name);
+                }
+                _ => {
+                    unreachable!();
                 }
             }
             return Ok(text);
@@ -83,8 +87,8 @@ fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
     }
 }
 
-fn load(ty: &Type) -> String {
-    if let TypeKind::Array(_, _) | TypeKind::Struct(_) | TypeKind::Union(_) = ty.kind {
+fn load(ty: &RefCell<Type>) -> String {
+    if let TypeKind::Array(_, _) | TypeKind::Struct(_) | TypeKind::Union(_) = ty.borrow().kind {
         // If it is an array, do not attempt to load a value to the
         // register because in general we can't load an entire array to a
         // register. As a result, the result of an evaluation of an array
@@ -94,11 +98,11 @@ fn load(ty: &Type) -> String {
         return "".to_owned();
     }
 
-    if ty.size == 1 {
+    if ty.borrow().size == 1 {
         "  movsbq rax, [rax]\n".to_owned()
-    } else if ty.size == 2 {
+    } else if ty.borrow().size == 2 {
         "  movswq rax, [rax]\n".to_owned()
-    } else if ty.size == 4 {
+    } else if ty.borrow().size == 4 {
         "   movsxd rax, [rax]\n".to_owned()
     } else {
         "  mov rax, [rax]\n".to_owned()
@@ -123,7 +127,7 @@ pub fn gen_program(program: &mut Program) -> Result<String> {
 fn emit_data(obj: &Obj, ctx: &Context) -> Result<String> {
     let mut text = String::new();
     if let ObjKind::Global(name) = &obj.kind {
-        if !obj.ty.is_func() {
+        if !obj.ty.borrow().is_func() {
             text += ".data\n";
             text += &format!(".globl {}\n", name);
             text += &format!("{}:\n", name);
@@ -133,7 +137,7 @@ fn emit_data(obj: &Obj, ctx: &Context) -> Result<String> {
                 }
                 text += "  .byte 0\n";
             } else {
-                text += &format!("  .zero {}\n", obj.ty.size);
+                text += &format!("  .zero {}\n", obj.ty.borrow().size);
             }
         }
     }
@@ -166,7 +170,7 @@ fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
     // Save passed-by-register arguments to the stack
     for (r, obj) in func.params.iter().enumerate() {
         if let ObjKind::Local(offset) = obj.kind {
-            text += &store_gp(r, offset, obj.ty.size);
+            text += &store_gp(r, offset, obj.ty.borrow().size);
         } else {
             unreachable!();
         }
