@@ -587,6 +587,33 @@ fn declarator(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) 
     })
 }
 
+// abstract-declarator = "*"* ("(" abstract-declarator ")")? type-suffix
+fn abstract_declarator(
+    tok: &mut &Token,
+    base_ty: &Rc<RefCell<Type>>,
+    ctx: &mut Context,
+) -> Result<Rc<RefCell<Type>>> {
+    let mut ty = Rc::clone(base_ty);
+    while tokenize::consume_punct(tok, "*") {
+        ty = Type::new_ptr(&ty).wrap();
+    }
+    if tokenize::consume_punct(tok, "(") {
+        let dummy = Type::new_int().wrap();
+        let mut cur = *tok;
+        abstract_declarator(tok, &dummy, ctx)?;
+        tokenize::expect_punct(tok, ")", ctx)?;
+        ty = type_suffix(tok, &ty, ctx)?;
+        return abstract_declarator(&mut cur, &ty, ctx);
+    }
+    type_suffix(tok, &ty, ctx)
+}
+
+// type-name = declspec abstract-declarator
+fn typename(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
+    let spec = declspec(tok, ctx, false)?;
+    abstract_declarator(tok, &spec.ty, ctx)
+}
+
 // declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
 fn declaration(
     tok: &mut &Token,
@@ -1037,6 +1064,7 @@ fn stmt_expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 
 // primary = "(" "{" stmt+ "}" ")"
 //         | "(" expr ")"
+//         | "sizeof" "(" type-name ")"
 //         | "sizeof" unary
 //         | ident func-args?
 //         | str
@@ -1058,6 +1086,17 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 
     if tokenize::consume_punct(tok, "sizeof") {
+        let mut cur = *tok;
+        if tokenize::consume_punct(&mut cur, "(") && is_typename(cur, ctx) {
+            *tok = cur;
+            let ty = typename(tok, ctx)?;
+            let size = ty.borrow().size;
+            if size.is_none() {
+                return Err(error_message("invalid operand", ctx, loc));
+            }
+            tokenize::expect_punct(tok, ")", ctx)?;
+            return Ok(Expr::new_num(size.unwrap() as i64, loc));
+        }
         let expr = unary(tok, ctx)?;
         let size = expr.ty.borrow().size;
         if size.is_none() {

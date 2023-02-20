@@ -4,10 +4,8 @@ struct node_t {
     Node *next;
 };
 
-Node dummy;
-
 void push_back(Node **cur, int val) {
-    Node *new_node = calloc(1, sizeof(dummy));
+    Node *new_node = calloc(1, sizeof(Node));
     new_node->val = val;
     (*cur)->next = new_node;
     *cur = new_node;
