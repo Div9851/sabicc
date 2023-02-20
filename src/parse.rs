@@ -141,7 +141,7 @@ impl Expr {
                 if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
                     let expr = Expr {
                         kind: ExprKind::Binary { op, lhs, rhs },
-                        ty: Type::new_int(),
+                        ty: Type::new_int().wrap(),
                         loc,
                     };
                     Ok(Box::new(expr))
@@ -152,7 +152,7 @@ impl Expr {
             BinaryOp::EQ | BinaryOp::NE | BinaryOp::LT | BinaryOp::LE => {
                 let expr = Expr {
                     kind: ExprKind::Binary { op, lhs, rhs },
-                    ty: Type::new_int(),
+                    ty: Type::new_int().wrap(),
                     loc,
                 };
                 Ok(Box::new(expr))
@@ -181,13 +181,17 @@ impl Expr {
         let result_ty;
         if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
             // `int + int`
-            result_ty = Type::new_int();
+            result_ty = Type::new_int().wrap();
         } else if lhs.ty.borrow().is_ptr() && rhs.ty.borrow().is_integer() {
             // `ptr + int`
+            let size = lhs.ty.borrow().get_base_ty().borrow().size;
+            if size.is_none() {
+                return Err(error_message("invalid operands", ctx, loc));
+            }
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
                 rhs,
-                Expr::new_num(lhs.ty.borrow().get_base_ty().borrow().size as i64, loc),
+                Expr::new_num(size.unwrap() as i64, loc),
                 ctx,
                 loc,
             )?;
@@ -212,13 +216,17 @@ impl Expr {
         let mut div = 1;
         if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
             // `int - int`
-            result_ty = Type::new_int();
+            result_ty = Type::new_int().wrap();
         } else if lhs.ty.borrow().is_ptr() && rhs.ty.borrow().is_integer() {
             // `ptr - int`
+            let size = lhs.ty.borrow().get_base_ty().borrow().size;
+            if size.is_none() {
+                return Err(error_message("invalid operands", ctx, loc));
+            }
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
                 rhs,
-                Expr::new_num(lhs.ty.borrow().get_base_ty().borrow().size as i64, loc),
+                Expr::new_num(size.unwrap() as i64, loc),
                 ctx,
                 loc,
             )?;
@@ -229,8 +237,12 @@ impl Expr {
         } else {
             // `ptr - ptr`
             // todo: type check
-            div = lhs.ty.borrow().get_base_ty().borrow().size as i64;
-            result_ty = Type::new_int();
+            let size = lhs.ty.borrow().get_base_ty().borrow().size;
+            if size.is_none() {
+                return Err(error_message("invalid operands", ctx, loc));
+            }
+            div = size.unwrap() as i64;
+            result_ty = Type::new_int().wrap();
         }
         let mut expr = Box::new(Expr {
             kind: ExprKind::Binary {
@@ -252,7 +264,7 @@ impl Expr {
         match op {
             UnaryOp::NEG => {
                 if expr.ty.borrow().is_integer() {
-                    result_ty = Type::new_int();
+                    result_ty = Type::new_int().wrap();
                 } else {
                     return Err(error_message("invalid operand", ctx, loc));
                 }
@@ -269,7 +281,7 @@ impl Expr {
                 }
             }
             UnaryOp::ADDR => {
-                result_ty = Type::new_ptr(&expr.ty);
+                result_ty = Type::new_ptr(&expr.ty).wrap();
             }
         }
         Ok(Box::new(Expr {
@@ -311,7 +323,7 @@ impl Expr {
     fn new_num(val: i64, loc: usize) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::Num(val),
-            ty: Type::new_int(),
+            ty: Type::new_int().wrap(),
             loc,
         })
     }
@@ -322,7 +334,7 @@ impl Expr {
                 name: name.to_owned(),
                 args,
             },
-            ty: Type::new_long(),
+            ty: Type::new_long().wrap(),
             loc,
         })
     }
@@ -403,7 +415,7 @@ fn is_func_def(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
         return Ok(false);
     }
     let mut cur = *tok;
-    let dummy = Type::new_int();
+    let dummy = Type::new_int().wrap();
     ctx.enter_scope();
     let decl = declarator(&mut cur, &dummy, ctx)?;
     ctx.leave_scope();
@@ -440,7 +452,7 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
     const LONG_LONG: usize = LONG + LONG;
     const LONG_LONG_INT: usize = LONG + LONG + INT;
 
-    let mut ty = Type::new_int();
+    let mut ty = Type::new_int().wrap();
     let mut counter = 0;
     let mut attr = VarAttr { is_typedef: false };
     while is_typename(tok, ctx) {
@@ -466,10 +478,10 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
                 break;
             }
             if tokenize::consume_punct(tok, "struct") {
-                ty = struct_decl(tok, ctx)?;
+                ty = struct_union_decl(tok, ctx, true)?;
             } else if tokenize::consume_punct(tok, "union") {
                 tokenize::consume_punct(tok, "union");
-                ty = union_decl(tok, ctx)?;
+                ty = struct_union_decl(tok, ctx, false)?;
             } else {
                 let ident = tokenize::expect_ident(tok, ctx)?;
                 ty = ctx.find_var(ident).unwrap().ty;
@@ -495,19 +507,19 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
         }
         match counter {
             VOID => {
-                ty = Type::new_void();
+                ty = Type::new_void().wrap();
             }
             CHAR => {
-                ty = Type::new_char();
+                ty = Type::new_char().wrap();
             }
             SHORT | SHORT_INT => {
-                ty = Type::new_short();
+                ty = Type::new_short().wrap();
             }
             INT => {
-                ty = Type::new_int();
+                ty = Type::new_int().wrap();
             }
             LONG | LONG_INT | LONG_LONG | LONG_LONG_INT => {
-                ty = Type::new_long();
+                ty = Type::new_long().wrap();
             }
             _ => {
                 return Err(error_message("invalid type", ctx, tok.loc));
@@ -542,12 +554,12 @@ fn type_suffix(
 ) -> Result<Rc<RefCell<Type>>> {
     if tokenize::consume_punct(tok, "(") {
         let params = func_params(tok, ctx)?;
-        Ok(Type::new_func(params, ty))
+        Ok(Type::new_func(params, ty).wrap())
     } else if tokenize::consume_punct(tok, "[") {
         let len = tokenize::expect_number(tok, ctx)?;
         tokenize::expect_punct(tok, "]", ctx)?;
         let base_ty = type_suffix(tok, ty, ctx)?;
-        Ok(Type::new_array(&base_ty, len as usize))
+        Ok(Type::new_array(&base_ty, len as usize).wrap())
     } else {
         Ok(Rc::clone(ty))
     }
@@ -557,10 +569,10 @@ fn type_suffix(
 fn declarator(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<Decl> {
     let mut ty = Rc::clone(base_ty);
     while tokenize::consume_punct(tok, "*") {
-        ty = Type::new_ptr(&ty);
+        ty = Type::new_ptr(&ty).wrap();
     }
     if tokenize::consume_punct(tok, "(") {
-        let dummy = Type::new_int();
+        let dummy = Type::new_int().wrap();
         let mut cur = *tok;
         declarator(tok, &dummy, ctx)?;
         tokenize::expect_punct(tok, ")", ctx)?;
@@ -642,48 +654,52 @@ fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
     Ok(member_decls)
 }
 
-// struct-decl = ident? ("{" struct-members)?
-fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
-    let loc = tok.loc;
+// struct-union-decl = ident? ("{" struct-members)?
+fn struct_union_decl(
+    tok: &mut &Token,
+    ctx: &mut Context,
+    is_struct: bool,
+) -> Result<Rc<RefCell<Type>>> {
+    // Read a tag.
     let tag = tokenize::consume_ident(tok);
     if tag.is_some() && !tokenize::equal_punct(tok, "{") {
         let tag = tag.unwrap();
-        let ty = ctx.find_tag(tag);
-        if ty.is_some() {
-            return Ok(ty.unwrap());
+        if let Some(ty) = ctx.find_tag(tag) {
+            return Ok(ty);
         } else {
-            return Err(error_message("unknown struct type", ctx, loc));
+            let ty;
+            if is_struct {
+                ty = Type::new_struct(Vec::new());
+            } else {
+                ty = Type::new_union(Vec::new());
+            }
+            let ty = ty.wrap();
+            ctx.new_tag(tag, &ty);
+            return Ok(ty);
         }
     }
     tokenize::consume_punct(tok, "{");
     let member_decls = struct_members(tok, ctx)?;
-    let ty = Type::new_struct(member_decls);
-    if let Some(tag) = tag {
-        ctx.new_tag(tag, &ty);
+    let struct_ty;
+    if is_struct {
+        struct_ty = Type::new_struct(member_decls);
+    } else {
+        struct_ty = Type::new_union(member_decls);
     }
-    Ok(ty)
-}
-
-/// union-decl = ident? ("{" struct-members)?
-fn union_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
-    let loc = tok.loc;
-    let tag = tokenize::consume_ident(tok);
-    if tag.is_some() && !tokenize::equal_punct(tok, "{") {
-        let tag = tag.unwrap();
-        let ty = ctx.find_tag(tag);
-        if ty.is_some() {
-            return Ok(ty.unwrap());
+    if let Some(tag) = tag {
+        // If this is a redefinition, overwrite a previous type.
+        // Otherwise, register the struct type.
+        if let Some(ty) = ctx.find_tag_in_current_scope(tag) {
+            *ty.borrow_mut() = struct_ty;
+            return Ok(ty);
         } else {
-            return Err(error_message("unknown union type", ctx, loc));
+            let ty = struct_ty.wrap();
+            ctx.new_tag(tag, &ty);
+            return Ok(ty);
         }
+    } else {
+        Ok(struct_ty.wrap())
     }
-    tokenize::consume_punct(tok, "{");
-    let member_decls = struct_members(tok, ctx)?;
-    let ty = Type::new_union(member_decls);
-    if let Some(tag) = tag {
-        ctx.new_tag(tag, &ty);
-    }
-    Ok(ty)
 }
 
 fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<()> {
@@ -1043,7 +1059,11 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 
     if tokenize::consume_punct(tok, "sizeof") {
         let expr = unary(tok, ctx)?;
-        return Ok(Expr::new_num(expr.ty.borrow().size as i64, loc));
+        let size = expr.ty.borrow().size;
+        if size.is_none() {
+            return Err(error_message("invalid operand", ctx, loc));
+        }
+        return Ok(Expr::new_num(size.unwrap() as i64, loc));
     }
 
     if let Some(val) = tokenize::consume_number(tok) {

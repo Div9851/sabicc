@@ -64,88 +64,88 @@ pub enum TypeKind {
 
 pub struct Type {
     pub kind: TypeKind,
-    pub size: usize,  // sizeof() value
-    pub align: usize, // alignment
+    pub size: Option<usize>, // sizeof() value
+    pub align: usize,        // alignment
 }
 
 impl Type {
-    fn new_void() -> Rc<RefCell<Type>> {
-        Rc::new(RefCell::new(Type {
+    fn new_void() -> Type {
+        Type {
             kind: TypeKind::Void,
-            size: 1,
+            size: None,
             align: 1,
-        }))
+        }
     }
 
-    fn new_char() -> Rc<RefCell<Type>> {
-        Rc::new(RefCell::new(Type {
+    fn new_char() -> Type {
+        Type {
             kind: TypeKind::Char,
-            size: 1,
+            size: Some(1),
             align: 1,
-        }))
+        }
     }
 
-    fn new_short() -> Rc<RefCell<Type>> {
-        Rc::new(RefCell::new(Type {
+    fn new_short() -> Type {
+        Type {
             kind: TypeKind::Short,
-            size: 2,
+            size: Some(2),
             align: 2,
-        }))
+        }
     }
 
-    fn new_int() -> Rc<RefCell<Type>> {
-        Rc::new(RefCell::new(Type {
+    fn new_int() -> Type {
+        Type {
             kind: TypeKind::Int,
-            size: 4,
+            size: Some(4),
             align: 4,
-        }))
+        }
     }
 
-    fn new_long() -> Rc<RefCell<Type>> {
-        Rc::new(RefCell::new(Type {
+    fn new_long() -> Type {
+        Type {
             kind: TypeKind::Char,
-            size: 8,
+            size: Some(8),
             align: 8,
-        }))
+        }
     }
 
-    fn new_str(len: usize) -> Rc<RefCell<Type>> {
-        Type::new_array(&Type::new_char(), len)
+    fn new_str(len: usize) -> Type {
+        Type::new_array(&Type::new_char().wrap(), len)
     }
 
-    fn new_ptr(base_ty: &Rc<RefCell<Type>>) -> Rc<RefCell<Type>> {
-        Rc::new(RefCell::new(Type {
+    fn new_ptr(base_ty: &Rc<RefCell<Type>>) -> Type {
+        Type {
             kind: TypeKind::Ptr(Rc::clone(base_ty)),
-            size: 8,
+            size: Some(8),
             align: 8,
-        }))
+        }
     }
 
-    fn new_array(base_ty: &Rc<RefCell<Type>>, len: usize) -> Rc<RefCell<Type>> {
-        Rc::new(RefCell::new(Type {
+    fn new_array(base_ty: &Rc<RefCell<Type>>, len: usize) -> Type {
+        Type {
             kind: TypeKind::Array(Rc::clone(base_ty), len),
-            size: base_ty.borrow().size * len,
+            size: Some(base_ty.borrow().size.unwrap() * len),
             align: base_ty.borrow().align,
-        }))
+        }
     }
 
-    fn new_func(params: Vec<Decl>, return_ty: &Rc<RefCell<Type>>) -> Rc<RefCell<Type>> {
-        Rc::new(RefCell::new(Type {
+    fn new_func(params: Vec<Decl>, return_ty: &Rc<RefCell<Type>>) -> Type {
+        Type {
             kind: TypeKind::Func {
                 params,
                 return_ty: Rc::clone(return_ty),
             },
-            size: 0,
+            size: None,
             align: 0,
-        }))
+        }
     }
 
-    fn new_struct(member_decls: Vec<Decl>) -> Rc<RefCell<Type>> {
+    fn new_struct(member_decls: Vec<Decl>) -> Type {
         let mut members = HashMap::new();
         let mut offset = 0;
         let mut align = 1;
         for member_decl in member_decls {
-            let member_size = member_decl.ty.borrow().size;
+            let member_size = member_decl.ty.borrow().size.unwrap();
             let member_align = member_decl.ty.borrow().align;
             offset = align_to(offset, align);
             members.insert(
@@ -160,19 +160,20 @@ impl Type {
                 align = member_align;
             }
         }
-        Rc::new(RefCell::new(Type {
+        offset = align_to(offset, align);
+        Type {
             kind: TypeKind::Struct(members),
-            size: align_to(offset, align),
+            size: Some(offset),
             align,
-        }))
+        }
     }
 
-    fn new_union(member_decls: Vec<Decl>) -> Rc<RefCell<Type>> {
+    fn new_union(member_decls: Vec<Decl>) -> Type {
         let mut members = HashMap::new();
         let mut size = 0;
         let mut align = 1;
         for member_decl in member_decls {
-            let member_size = member_decl.ty.borrow().size;
+            let member_size = member_decl.ty.borrow().size.unwrap();
             let member_align = member_decl.ty.borrow().align;
             members.insert(
                 member_decl.name,
@@ -188,11 +189,12 @@ impl Type {
                 align = member_align;
             }
         }
-        Rc::new(RefCell::new(Type {
+        size = align_to(size, align);
+        Type {
             kind: TypeKind::Union(members),
-            size: align_to(size, align),
+            size: Some(size),
             align,
-        }))
+        }
     }
 
     pub fn is_void(&self) -> bool {
@@ -227,6 +229,10 @@ impl Type {
             TypeKind::Ptr(base_ty) | TypeKind::Array(base_ty, _) => base_ty,
             _ => panic!("try to get base_ty of a non pointer type"),
         }
+    }
+
+    pub fn wrap(self) -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(self))
     }
 }
 
@@ -285,7 +291,7 @@ impl Context {
     }
 
     pub fn new_lvar(&mut self, decl: &Decl) -> Obj {
-        self.stack_size += decl.ty.borrow().size;
+        self.stack_size += decl.ty.borrow().size.unwrap();
         self.stack_size = align_to(self.stack_size, decl.ty.borrow().align);
         let offset = self.stack_size;
         let obj = Obj {
@@ -340,7 +346,7 @@ impl Context {
         let name = self.new_unique_name();
         let decl = Decl {
             name: name.clone(),
-            ty: Type::new_str(bytes.len() + 1),
+            ty: Type::new_str(bytes.len() + 1).wrap(),
         };
         let obj = self.new_gvar(&decl);
         self.init_data.insert(name, bytes);
@@ -363,6 +369,14 @@ impl Context {
             }
         }
         None
+    }
+
+    pub fn find_tag_in_current_scope(&self, tag: &str) -> Option<Rc<RefCell<Type>>> {
+        if let Some(ty) = self.tag_scopes.last().unwrap().get(tag) {
+            Some(Rc::clone(ty))
+        } else {
+            None
+        }
     }
 }
 

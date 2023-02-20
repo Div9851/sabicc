@@ -24,19 +24,20 @@ fn store(ty: &RefCell<Type>) -> String {
     let mut output = String::new();
     write!(&mut output, "{}", pop("rdi")).unwrap();
 
+    let size = ty.borrow().size.unwrap();
     if ty.borrow().is_struct() || ty.borrow().is_union() {
-        for i in 0..ty.borrow().size {
+        for i in 0..size {
             writeln!(&mut output, "  mov r8b, [rax+{}]", i).unwrap();
             writeln!(&mut output, "  mov [rdi+{}], r8b", i).unwrap();
         }
         return output;
     }
 
-    if ty.borrow().size == 1 {
+    if size == 1 {
         writeln!(&mut output, "  mov [rdi], al").unwrap();
-    } else if ty.borrow().size == 2 {
+    } else if size == 2 {
         writeln!(&mut output, "  mov [rdi], ax").unwrap();
-    } else if ty.borrow().size == 4 {
+    } else if size == 4 {
         writeln!(&mut output, "  mov [rdi], eax").unwrap();
     } else {
         writeln!(&mut output, "  mov [rdi], rax").unwrap();
@@ -100,11 +101,12 @@ fn load(ty: &RefCell<Type>) -> String {
         return output;
     }
 
-    if ty.borrow().size == 1 {
+    let size = ty.borrow().size.unwrap();
+    if size == 1 {
         writeln!(&mut output, "  movsbq rax, [rax]").unwrap();
-    } else if ty.borrow().size == 2 {
+    } else if size == 2 {
         writeln!(&mut output, "  movswq rax, [rax]").unwrap();
-    } else if ty.borrow().size == 4 {
+    } else if size == 4 {
         writeln!(&mut output, "  movsxd rax, [rax]").unwrap();
     } else {
         writeln!(&mut output, "  mov rax, [rax]").unwrap();
@@ -140,7 +142,7 @@ fn emit_data(obj: &Obj, ctx: &Context) -> Result<String> {
                 }
                 writeln!(&mut output, "  .byte 0").unwrap();
             } else {
-                writeln!(&mut output, "  .zero {}", obj.ty.borrow().size).unwrap();
+                writeln!(&mut output, "  .zero {}", obj.ty.borrow().size.unwrap()).unwrap();
             }
         }
     }
@@ -173,7 +175,12 @@ fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
     // Save passed-by-register arguments to the stack
     for (r, obj) in func.params.iter().enumerate() {
         if let ObjKind::Local(offset) = obj.kind {
-            write!(&mut output, "{}", store_gp(r, offset, obj.ty.borrow().size)).unwrap();
+            write!(
+                &mut output,
+                "{}",
+                store_gp(r, offset, obj.ty.borrow().size.unwrap())
+            )
+            .unwrap();
         } else {
             unreachable!();
         }
