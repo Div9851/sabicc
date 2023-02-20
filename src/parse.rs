@@ -3,10 +3,8 @@ use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 
-use crate::tokenize::{self, Token, TokenKind};
-use crate::{
-    align_to, error_message, Context, Decl, DeclSpec, Obj, ObjKind, Type, TypeKind, VarAttr,
-};
+use crate::tokenize::{self, Token};
+use crate::{align_to, error_message, Context, Decl, DeclSpec, Obj, Type, TypeKind, VarAttr};
 
 pub struct Program {
     pub funcs: Vec<Box<Func>>,
@@ -30,7 +28,6 @@ pub struct Func {
 }
 
 pub enum StmtKind {
-    DeclStmt(Vec<Box<Stmt>>),
     NullStmt,
     ReturnStmt(Box<Expr>),
     CompoundStmt(Vec<Box<Stmt>>),
@@ -55,6 +52,16 @@ pub enum StmtKind {
 pub struct Stmt {
     pub kind: StmtKind,
     pub loc: usize,
+}
+
+impl Stmt {
+    fn get_body(self) -> Vec<Box<Stmt>> {
+        if let StmtKind::CompoundStmt(body) = self.kind {
+            body
+        } else {
+            panic!("expected a compound statement");
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -252,10 +259,9 @@ impl Expr {
             }
             UnaryOp::DEREF => {
                 if expr.ty.borrow().is_ptr() {
-                    if let TypeKind::Ptr(base_ty) = &expr.ty.borrow().kind {
-                        if base_ty.borrow().is_void() {
-                            return Err(error_message("dereferencing a void pointer", ctx, loc));
-                        }
+                    let ty = expr.ty.borrow();
+                    if ty.get_base_ty().borrow().is_void() {
+                        return Err(error_message("dereferencing a void pointer", ctx, loc));
                     }
                     result_ty = Rc::clone(expr.ty.borrow().get_base_ty());
                 } else {
@@ -348,9 +354,9 @@ pub fn program(text: String, filename: &str) -> Result<Program> {
 
 fn global_variable(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<()> {
     let mut first = true;
-    while !tokenize::consume(tok, ";") {
+    while !tokenize::consume_punct(tok, ";") {
         if !first {
-            tokenize::expect(tok, ",", ctx)?;
+            tokenize::expect_punct(tok, ",", ctx)?;
         }
         first = false;
         let decl = declarator(tok, base_ty, ctx)?;
@@ -393,7 +399,7 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) ->
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition
 fn is_func_def(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
-    if tokenize::equal(tok, ";") {
+    if tokenize::equal_punct(tok, ";") {
         return Ok(false);
     }
     let mut cur = *tok;
@@ -401,31 +407,28 @@ fn is_func_def(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
     ctx.enter_scope();
     let decl = declarator(&mut cur, &dummy, ctx)?;
     ctx.leave_scope();
-    Ok(decl.ty.borrow().is_func() && !tokenize::equal(cur, ";"))
-}
-
-// Returns true if a given token represents a type.
-fn is_typename(tok: &Token, ctx: &Context) -> bool {
-    if matches!(tok.kind, TokenKind::Ident) {
-        if let Some(obj) = ctx.find_var(&tok.text) {
-            return matches!(obj.kind, ObjKind::TypeDef);
-        }
-        return false;
-    }
-    tokenize::equal(tok, "void")
-        || tokenize::equal(tok, "char")
-        || tokenize::equal(tok, "short")
-        || tokenize::equal(tok, "int")
-        || tokenize::equal(tok, "long")
-        || tokenize::equal(tok, "struct")
-        || tokenize::equal(tok, "union")
-        || tokenize::equal(tok, "typedef")
+    Ok(decl.ty.borrow().is_func() && !tokenize::equal_punct(cur, ";"))
 }
 
 // declspec = ("void" | "char" | "short" | "int" | "long" |
 //             | "typedef"
 //             | struct-decl | union-decl | typedef-name)+
+// The order of typenames in a type-specifier doesn't matter. For
+// example, `int long static` means the same as `static long int`.
+// That can also be written as `static long` because you can omit
+// `int` if `long` or `short` are specified. However, something like
+// `char int` is not valid type specifier. We have to accept only a
+// limited combinations of the typenames.
+//
+// In this function, we count the number of occurences of each typename
+// while keeping the "current" type object that the typenames up
+// until that point represent. When we reach a non-typename token,
+// we returns the current type object.
 fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<DeclSpec> {
+    // We use a single integer as counters for all typenames.
+    // For example, bits 0 and 1 represents how many times we saw the
+    // keyword "void" so far. With this, we can use a match statement
+    // as you can see below.
     const VOID: usize = 1 << 0;
     const CHAR: usize = 1 << 2;
     const SHORT: usize = 1 << 4;
@@ -442,7 +445,7 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
     let mut attr = VarAttr { is_typedef: false };
     while is_typename(tok, ctx) {
         // Handle "typedef" keyword
-        if tokenize::equal(tok, "typedef") {
+        if tokenize::equal_punct(tok, "typedef") {
             if !accept_attr {
                 return Err(error_message(
                     "storage class specifier is not allowed in this context",
@@ -450,44 +453,44 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
                     tok.loc,
                 ));
             }
-            tokenize::consume(tok, "typedef");
+            tokenize::consume_punct(tok, "typedef");
             attr.is_typedef = true;
             continue;
         }
         // Handle user-defined types.
-        if tokenize::equal(tok, "struct")
-            || tokenize::equal(tok, "union")
-            || matches!(tok.kind, TokenKind::Ident)
+        if tokenize::equal_punct(tok, "struct")
+            || tokenize::equal_punct(tok, "union")
+            || tokenize::equal_ident(tok)
         {
             if counter > 0 {
                 break;
             }
-            if tokenize::consume(tok, "struct") {
+            if tokenize::consume_punct(tok, "struct") {
                 ty = struct_decl(tok, ctx)?;
-            } else if tokenize::consume(tok, "union") {
-                tokenize::consume(tok, "union");
+            } else if tokenize::consume_punct(tok, "union") {
+                tokenize::consume_punct(tok, "union");
                 ty = union_decl(tok, ctx)?;
             } else {
-                let ident = tokenize::consume_ident(tok).unwrap();
+                let ident = tokenize::expect_ident(tok, ctx)?;
                 ty = ctx.find_var(ident).unwrap().ty;
             }
             counter += OTHER;
             continue;
         }
         // Handle built-in types.
-        if tokenize::consume(tok, "void") {
+        if tokenize::consume_punct(tok, "void") {
             counter += VOID;
         }
-        if tokenize::consume(tok, "char") {
+        if tokenize::consume_punct(tok, "char") {
             counter += CHAR;
         }
-        if tokenize::consume(tok, "short") {
+        if tokenize::consume_punct(tok, "short") {
             counter += SHORT;
         }
-        if tokenize::consume(tok, "int") {
+        if tokenize::consume_punct(tok, "int") {
             counter += INT;
         }
-        if tokenize::consume(tok, "long") {
+        if tokenize::consume_punct(tok, "long") {
             counter += LONG;
         }
         match counter {
@@ -514,85 +517,13 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
     Ok(DeclSpec { ty, attr })
 }
 
-// struct-members = "{" (declspec declarator ("," declarator)* ";")* "}"
-fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
-    tokenize::expect(tok, "{", ctx)?;
-    let mut member_decls = Vec::new();
-    while !tokenize::consume(tok, "}") {
-        let spec = declspec(tok, ctx, false)?;
-        let mut first = true;
-        while !tokenize::consume(tok, ";") {
-            if !first {
-                tokenize::expect(tok, ",", ctx)?;
-            }
-            first = false;
-            let member_decl = declarator(tok, &spec.ty, ctx)?;
-            member_decls.push(member_decl);
-        }
-    }
-    Ok(member_decls)
-}
-
-// union-decl = ident | ident? struct-members
-fn union_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
-    let loc = tok.loc;
-    let tag = tokenize::consume_ident(tok);
-    if tag.is_some() && !tokenize::equal(tok, "{") {
-        let tag = tag.unwrap();
-        if let Some(ty) = ctx.find_tag(tag) {
-            if !ty.borrow().is_union() {
-                return Err(error_message(
-                    &format!("'{}' defined as wrong kind of tag", tag),
-                    ctx,
-                    loc,
-                ));
-            }
-            return Ok(ty);
-        }
-        return Err(error_message("unknown union type", ctx, loc));
-    }
-    let member_decls = struct_members(tok, ctx)?;
-    let ty = Type::new_union(member_decls);
-    if let Some(tag) = tag {
-        ctx.new_tag(tag, &ty);
-    }
-    Ok(ty)
-}
-
-// struct-decl = ident | ident? struct-members
-fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
-    let loc = tok.loc;
-    let tag = tokenize::consume_ident(tok);
-    if tag.is_some() && !tokenize::equal(tok, "{") {
-        let tag = tag.unwrap();
-        if let Some(ty) = ctx.find_tag(tag) {
-            if !ty.borrow().is_struct() {
-                return Err(error_message(
-                    &format!("'{}' defined as wrong kind of tag", tag),
-                    ctx,
-                    loc,
-                ));
-            }
-            return Ok(ty);
-        }
-        return Err(error_message("unknown struct type", ctx, loc));
-    }
-    let member_decls = struct_members(tok, ctx)?;
-    let ty = Type::new_struct(member_decls);
-    if let Some(tag) = tag {
-        ctx.new_tag(tag, &ty);
-    }
-    Ok(ty)
-}
-
-// func-params = "(" (param ("," param)*)? ")"
+// func-params = (param ("," param)*)? ")"
 // param       = declspec declarator
 fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
-    tokenize::expect(tok, "(", ctx)?;
     let mut params = Vec::new();
-    while !tokenize::consume(tok, ")") {
+    while !tokenize::consume_punct(tok, ")") {
         if params.len() > 0 {
-            tokenize::expect(tok, ",", ctx)?;
+            tokenize::expect_punct(tok, ",", ctx)?;
         }
         let spec = declspec(tok, ctx, false)?;
         let param = declarator(tok, &spec.ty, ctx)?;
@@ -601,7 +532,7 @@ fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
     Ok(params)
 }
 
-// type-suffix = func-params
+// type-suffix = "(" func-params
 //             = "[" num "]" type-suffix
 //             = ε
 fn type_suffix(
@@ -609,13 +540,12 @@ fn type_suffix(
     ty: &Rc<RefCell<Type>>,
     ctx: &mut Context,
 ) -> Result<Rc<RefCell<Type>>> {
-    if tokenize::equal(tok, "(") {
+    if tokenize::consume_punct(tok, "(") {
         let params = func_params(tok, ctx)?;
         Ok(Type::new_func(params, ty))
-    } else if tokenize::equal(tok, "[") {
-        tokenize::expect(tok, "[", ctx)?;
+    } else if tokenize::consume_punct(tok, "[") {
         let len = tokenize::expect_number(tok, ctx)?;
-        tokenize::expect(tok, "]", ctx)?;
+        tokenize::expect_punct(tok, "]", ctx)?;
         let base_ty = type_suffix(tok, ty, ctx)?;
         Ok(Type::new_array(&base_ty, len as usize))
     } else {
@@ -626,37 +556,142 @@ fn type_suffix(
 // declarator = "*"* ("(" declarator ")" | ident) type-suffix
 fn declarator(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<Decl> {
     let mut ty = Rc::clone(base_ty);
-    while tokenize::consume(tok, "*") {
+    while tokenize::consume_punct(tok, "*") {
         ty = Type::new_ptr(&ty);
     }
-    if tokenize::consume(tok, "(") {
+    if tokenize::consume_punct(tok, "(") {
         let dummy = Type::new_int();
         let mut cur = *tok;
         declarator(tok, &dummy, ctx)?;
-        tokenize::expect(tok, ")", ctx)?;
+        tokenize::expect_punct(tok, ")", ctx)?;
         ty = type_suffix(tok, &ty, ctx)?;
         return declarator(&mut cur, &ty, ctx);
     }
-    if !matches!(tok.kind, TokenKind::Ident) {
-        return Err(error_message("expected an identifier", ctx, tok.loc));
+    let ident = tokenize::expect_ident(tok, ctx)?;
+    ty = type_suffix(tok, &ty, ctx)?;
+    Ok(Decl {
+        name: ident.to_owned(),
+        ty,
+    })
+}
+
+// declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
+fn declaration(
+    tok: &mut &Token,
+    ctx: &mut Context,
+    base_ty: &Rc<RefCell<Type>>,
+) -> Result<Vec<Box<Stmt>>> {
+    let mut init = Vec::new();
+    let mut count = 0;
+    while !tokenize::consume_punct(tok, ";") {
+        if count > 0 {
+            tokenize::expect_punct(tok, ",", ctx)?;
+        }
+        let loc = tok.loc;
+        let decl = declarator(tok, base_ty, ctx)?;
+        if decl.ty.borrow().is_void() {
+            return Err(error_message("variable declared void", ctx, loc));
+        }
+        let obj = ctx.new_lvar(&decl);
+        if tokenize::consume_punct(tok, "=") {
+            let lhs = Expr::new_var(obj, loc);
+            let rhs = assign(tok, ctx)?;
+            let expr = Expr::new_assign(lhs, rhs, loc);
+            let stmt = Box::new(Stmt {
+                kind: StmtKind::ExprStmt(expr),
+                loc,
+            });
+            init.push(stmt);
+        }
+        count += 1;
     }
-    if let Some(ident) = tokenize::consume_ident(tok) {
-        ty = type_suffix(tok, &ty, ctx)?;
-        Ok(Decl {
-            name: ident.to_owned(),
-            ty,
-        })
-    } else {
-        return Err(error_message("expected an identifier", ctx, tok.loc));
+    Ok(init)
+}
+
+// Returns true if a given token represents a type.
+fn is_typename(tok: &Token, ctx: &Context) -> bool {
+    if tokenize::equal_ident(tok) {
+        let obj = ctx.find_var(&tok.text);
+        return obj.is_some() && obj.unwrap().is_typedef();
     }
+    tokenize::equal_punct(tok, "void")
+        || tokenize::equal_punct(tok, "char")
+        || tokenize::equal_punct(tok, "short")
+        || tokenize::equal_punct(tok, "int")
+        || tokenize::equal_punct(tok, "long")
+        || tokenize::equal_punct(tok, "struct")
+        || tokenize::equal_punct(tok, "union")
+        || tokenize::equal_punct(tok, "typedef")
+}
+
+// struct-members = (declspec declarator ("," declarator)* ";")* "}"
+fn struct_members(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
+    let mut member_decls = Vec::new();
+    while !tokenize::consume_punct(tok, "}") {
+        let spec = declspec(tok, ctx, false)?;
+        let mut first = true;
+        while !tokenize::consume_punct(tok, ";") {
+            if !first {
+                tokenize::expect_punct(tok, ",", ctx)?;
+            }
+            first = false;
+            let member_decl = declarator(tok, &spec.ty, ctx)?;
+            member_decls.push(member_decl);
+        }
+    }
+    Ok(member_decls)
+}
+
+// struct-decl = ident? ("{" struct-members)?
+fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
+    let loc = tok.loc;
+    let tag = tokenize::consume_ident(tok);
+    if tag.is_some() && !tokenize::equal_punct(tok, "{") {
+        let tag = tag.unwrap();
+        let ty = ctx.find_tag(tag);
+        if ty.is_some() {
+            return Ok(ty.unwrap());
+        } else {
+            return Err(error_message("unknown struct type", ctx, loc));
+        }
+    }
+    tokenize::consume_punct(tok, "{");
+    let member_decls = struct_members(tok, ctx)?;
+    let ty = Type::new_struct(member_decls);
+    if let Some(tag) = tag {
+        ctx.new_tag(tag, &ty);
+    }
+    Ok(ty)
+}
+
+/// union-decl = ident? ("{" struct-members)?
+fn union_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
+    let loc = tok.loc;
+    let tag = tokenize::consume_ident(tok);
+    if tag.is_some() && !tokenize::equal_punct(tok, "{") {
+        let tag = tag.unwrap();
+        let ty = ctx.find_tag(tag);
+        if ty.is_some() {
+            return Ok(ty.unwrap());
+        } else {
+            return Err(error_message("unknown union type", ctx, loc));
+        }
+    }
+    tokenize::consume_punct(tok, "{");
+    let member_decls = struct_members(tok, ctx)?;
+    let ty = Type::new_union(member_decls);
+    if let Some(tag) = tag {
+        ctx.new_tag(tag, &ty);
+    }
+    Ok(ty)
 }
 
 fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<()> {
     let mut first = true;
 
-    while !tokenize::consume(tok, ";") {
+    while !tokenize::consume_punct(tok, ";") {
         if !first {
-            tokenize::consume(tok, ",");
+            tokenize::consume_punct(tok, ",");
         }
         first = false;
 
@@ -666,45 +701,7 @@ fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Contex
     Ok(())
 }
 
-// declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
-fn declaration(
-    tok: &mut &Token,
-    ctx: &mut Context,
-    base_ty: &Rc<RefCell<Type>>,
-) -> Result<Box<Stmt>> {
-    let loc = tok.loc;
-    let mut stmt_vec = Vec::new();
-    let mut count = 0;
-    while !tokenize::consume(tok, ";") {
-        if count > 0 {
-            tokenize::expect(tok, ",", ctx)?;
-        }
-        let loc = tok.loc;
-        let decl = declarator(tok, base_ty, ctx)?;
-        if decl.ty.borrow().is_void() {
-            return Err(error_message("variable declared void", ctx, loc));
-        }
-        let obj = ctx.new_lvar(&decl);
-        if tokenize::consume(tok, "=") {
-            let lhs = Expr::new_var(obj, loc);
-            let rhs = assign(tok, ctx)?;
-            let expr = Expr::new_assign(lhs, rhs, loc);
-            let stmt = Box::new(Stmt {
-                kind: StmtKind::ExprStmt(expr),
-                loc,
-            });
-            stmt_vec.push(stmt);
-        }
-        count += 1;
-    }
-    Ok(Box::new(Stmt {
-        kind: StmtKind::DeclStmt(stmt_vec),
-        loc,
-    }))
-}
-
-// stmt = declaration
-//      | "return" expr ";"
+// stmt = "return" expr ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "for" "(" expr-stmt? ";" expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
@@ -712,27 +709,17 @@ fn declaration(
 //      | expr-stmt
 //      | null-stmt
 fn stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
-    if is_typename(tok, ctx) {
-        let spec = declspec(tok, ctx, true)?;
-        if spec.attr.is_typedef {
-            parse_typedef(tok, &spec.ty, ctx)?;
-            return Ok(Box::new(Stmt {
-                kind: StmtKind::NullStmt,
-                loc: tok.loc,
-            }));
-        }
-        Ok(declaration(tok, ctx, &spec.ty)?)
-    } else if tokenize::equal(tok, ";") {
+    if tokenize::equal_punct(tok, ";") {
         Ok(null_stmt(tok, ctx)?)
-    } else if tokenize::equal(tok, "return") {
+    } else if tokenize::equal_punct(tok, "return") {
         Ok(return_stmt(tok, ctx)?)
-    } else if tokenize::equal(tok, "{") {
+    } else if tokenize::equal_punct(tok, "{") {
         Ok(compound_stmt(tok, ctx)?)
-    } else if tokenize::equal(tok, "if") {
+    } else if tokenize::equal_punct(tok, "if") {
         Ok(if_stmt(tok, ctx)?)
-    } else if tokenize::equal(tok, "for") {
+    } else if tokenize::equal_punct(tok, "for") {
         Ok(for_stmt(tok, ctx)?)
-    } else if tokenize::equal(tok, "while") {
+    } else if tokenize::equal_punct(tok, "while") {
         Ok(while_stmt(tok, ctx)?)
     } else {
         Ok(expr_stmt(tok, ctx)?)
@@ -741,7 +728,7 @@ fn stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
 
 fn null_stmt(tok: &mut &Token, ctx: &Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, ";", ctx)?;
+    tokenize::expect_punct(tok, ";", ctx)?;
     let stmt = Stmt {
         kind: StmtKind::NullStmt,
         loc,
@@ -751,22 +738,33 @@ fn null_stmt(tok: &mut &Token, ctx: &Context) -> Result<Box<Stmt>> {
 
 fn return_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "return", ctx)?;
+    tokenize::expect_punct(tok, "return", ctx)?;
     let stmt = Stmt {
         kind: StmtKind::ReturnStmt(expr(tok, ctx)?),
         loc,
     };
-    tokenize::expect(tok, ";", ctx)?;
+    tokenize::expect_punct(tok, ";", ctx)?;
     Ok(Box::new(stmt))
 }
 
+// compound-stmt = (typedef | declaration | stmt)* "}"
 fn compound_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "{", ctx)?;
+    tokenize::expect_punct(tok, "{", ctx)?;
     let mut block = Vec::new();
     ctx.enter_scope();
-    while !tokenize::consume(tok, "}") {
-        block.push(stmt(tok, ctx)?);
+    while !tokenize::consume_punct(tok, "}") {
+        if is_typename(tok, ctx) {
+            let spec = declspec(tok, ctx, true)?;
+            if spec.attr.is_typedef {
+                parse_typedef(tok, &spec.ty, ctx)?;
+                continue;
+            }
+            let init = declaration(tok, ctx, &spec.ty)?;
+            block.extend(init.into_iter());
+        } else {
+            block.push(stmt(tok, ctx)?);
+        }
     }
     ctx.leave_scope();
     let stmt = Stmt {
@@ -782,19 +780,19 @@ fn expr_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         kind: StmtKind::ExprStmt(expr(tok, ctx)?),
         loc,
     };
-    tokenize::expect(tok, ";", ctx)?;
+    tokenize::expect_punct(tok, ";", ctx)?;
     Ok(Box::new(stmt))
 }
 
 fn if_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "if", ctx)?;
-    tokenize::expect(tok, "(", ctx)?;
+    tokenize::expect_punct(tok, "if", ctx)?;
+    tokenize::expect_punct(tok, "(", ctx)?;
     let cond = expr(tok, ctx)?;
-    tokenize::expect(tok, ")", ctx)?;
+    tokenize::expect_punct(tok, ")", ctx)?;
     let then = stmt(tok, ctx)?;
     let mut els = None;
-    if tokenize::consume(tok, "else") {
+    if tokenize::consume_punct(tok, "else") {
         els = Some(stmt(tok, ctx)?);
     }
     let stmt = Stmt {
@@ -806,19 +804,19 @@ fn if_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
 
 fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "for", ctx)?;
-    tokenize::expect(tok, "(", ctx)?;
+    tokenize::expect_punct(tok, "for", ctx)?;
+    tokenize::expect_punct(tok, "(", ctx)?;
     let init = stmt(tok, ctx)?;
     let mut cond = None;
-    if !tokenize::equal(tok, ";") {
+    if !tokenize::equal_punct(tok, ";") {
         cond = Some(expr(tok, ctx)?);
     }
-    tokenize::expect(tok, ";", ctx)?;
+    tokenize::expect_punct(tok, ";", ctx)?;
     let mut inc = None;
-    if !tokenize::equal(tok, ")") {
+    if !tokenize::equal_punct(tok, ")") {
         inc = Some(expr(tok, ctx)?);
     }
-    tokenize::expect(tok, ")", ctx)?;
+    tokenize::expect_punct(tok, ")", ctx)?;
     let body = stmt(tok, ctx)?;
     let stmt = Stmt {
         kind: StmtKind::ForStmt {
@@ -834,10 +832,10 @@ fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
 
 fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
-    tokenize::expect(tok, "while", ctx)?;
-    tokenize::expect(tok, "(", ctx)?;
+    tokenize::expect_punct(tok, "while", ctx)?;
+    tokenize::expect_punct(tok, "(", ctx)?;
     let cond = expr(tok, ctx)?;
-    tokenize::expect(tok, ")", ctx)?;
+    tokenize::expect_punct(tok, ")", ctx)?;
     let body = stmt(tok, ctx)?;
     let stmt = Stmt {
         kind: StmtKind::WhileStmt { cond, body },
@@ -849,9 +847,9 @@ fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
 // expr = assign ("," expr)?
 fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let lhs = assign(tok, ctx)?;
-    if tokenize::equal(tok, ",") {
+    if tokenize::equal_punct(tok, ",") {
         let loc = tok.loc;
-        tokenize::consume(tok, ",");
+        tokenize::consume_punct(tok, ",");
         let rhs = expr(tok, ctx)?;
         return Ok(Expr::new_binary(BinaryOp::COMMA, lhs, rhs, ctx, loc)?);
     }
@@ -862,7 +860,7 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let lhs = equality(tok, ctx)?;
     let loc = tok.loc;
-    if tokenize::consume(tok, "=") {
+    if tokenize::consume_punct(tok, "=") {
         let rhs = assign(tok, ctx)?;
         Ok(Expr::new_assign(lhs, rhs, loc))
     } else {
@@ -875,11 +873,11 @@ fn equality(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = relational(tok, ctx)?;
     loop {
         let loc = tok.loc;
-        if tokenize::consume(tok, "==") {
+        if tokenize::consume_punct(tok, "==") {
             expr = Expr::new_binary(BinaryOp::EQ, expr, relational(tok, ctx)?, ctx, loc)?;
             continue;
         }
-        if tokenize::consume(tok, "!=") {
+        if tokenize::consume_punct(tok, "!=") {
             expr = Expr::new_binary(BinaryOp::NE, expr, relational(tok, ctx)?, ctx, loc)?;
             continue;
         }
@@ -892,19 +890,19 @@ fn relational(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = add(tok, ctx)?;
     loop {
         let loc = tok.loc;
-        if tokenize::consume(tok, "<") {
+        if tokenize::consume_punct(tok, "<") {
             expr = Expr::new_binary(BinaryOp::LT, expr, add(tok, ctx)?, ctx, loc)?;
             continue;
         }
-        if tokenize::consume(tok, "<=") {
+        if tokenize::consume_punct(tok, "<=") {
             expr = Expr::new_binary(BinaryOp::LE, expr, add(tok, ctx)?, ctx, loc)?;
             continue;
         }
-        if tokenize::consume(tok, ">") {
+        if tokenize::consume_punct(tok, ">") {
             expr = Expr::new_binary(BinaryOp::LT, add(tok, ctx)?, expr, ctx, loc)?;
             continue;
         }
-        if tokenize::consume(tok, ">=") {
+        if tokenize::consume_punct(tok, ">=") {
             expr = Expr::new_binary(BinaryOp::LE, add(tok, ctx)?, expr, ctx, loc)?;
             continue;
         }
@@ -917,12 +915,12 @@ fn add(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = mul(tok, ctx)?;
     loop {
         let loc = tok.loc;
-        if tokenize::consume(tok, "+") {
+        if tokenize::consume_punct(tok, "+") {
             let rhs = mul(tok, ctx)?;
             expr = Expr::new_binary(BinaryOp::ADD, expr, rhs, ctx, loc)?;
             continue;
         }
-        if tokenize::consume(tok, "-") {
+        if tokenize::consume_punct(tok, "-") {
             let rhs = mul(tok, ctx)?;
             expr = Expr::new_binary(BinaryOp::SUB, expr, rhs, ctx, loc)?;
             continue;
@@ -936,11 +934,11 @@ fn mul(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = unary(tok, ctx)?;
     loop {
         let loc = tok.loc;
-        if tokenize::consume(tok, "*") {
+        if tokenize::consume_punct(tok, "*") {
             expr = Expr::new_binary(BinaryOp::MUL, expr, unary(tok, ctx)?, ctx, loc)?;
             continue;
         }
-        if tokenize::consume(tok, "/") {
+        if tokenize::consume_punct(tok, "/") {
             expr = Expr::new_binary(BinaryOp::DIV, expr, unary(tok, ctx)?, ctx, loc)?;
             continue;
         }
@@ -952,13 +950,13 @@ fn mul(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 //       | postfix
 fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let loc = tok.loc;
-    if tokenize::consume(tok, "+") {
+    if tokenize::consume_punct(tok, "+") {
         unary(tok, ctx)
-    } else if tokenize::consume(tok, "-") {
+    } else if tokenize::consume_punct(tok, "-") {
         Ok(Expr::new_unary(UnaryOp::NEG, unary(tok, ctx)?, ctx, loc)?)
-    } else if tokenize::consume(tok, "*") {
+    } else if tokenize::consume_punct(tok, "*") {
         Ok(Expr::new_unary(UnaryOp::DEREF, unary(tok, ctx)?, ctx, loc)?)
-    } else if tokenize::consume(tok, "&") {
+    } else if tokenize::consume_punct(tok, "&") {
         Ok(Expr::new_unary(UnaryOp::ADDR, unary(tok, ctx)?, ctx, loc)?)
     } else {
         postfix(tok, ctx)
@@ -970,19 +968,19 @@ fn postfix(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut ret = primary(tok, ctx)?;
     loop {
         let loc = tok.loc;
-        if tokenize::consume(tok, "[") {
+        if tokenize::consume_punct(tok, "[") {
             let index = expr(tok, ctx)?;
-            tokenize::expect(tok, "]", ctx)?;
+            tokenize::expect_punct(tok, "]", ctx)?;
             ret = Expr::new_unary(
                 UnaryOp::DEREF,
                 Expr::new_binary(BinaryOp::ADD, ret, index, ctx, loc)?,
                 ctx,
                 loc,
             )?;
-        } else if tokenize::consume(tok, ".") {
+        } else if tokenize::consume_punct(tok, ".") {
             let name = tokenize::expect_ident(tok, ctx)?;
             ret = Expr::new_member(ret, name, ctx, loc)?;
-        } else if tokenize::consume(tok, "->") {
+        } else if tokenize::consume_punct(tok, "->") {
             ret = Expr::new_unary(UnaryOp::DEREF, ret, ctx, loc)?;
             let name = tokenize::expect_ident(tok, ctx)?;
             ret = Expr::new_member(ret, name, ctx, loc)?;
@@ -996,31 +994,28 @@ fn postfix(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 fn stmt_expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let loc = tok.loc;
     let stmt = compound_stmt(tok, ctx)?;
-    if let StmtKind::CompoundStmt(stmt_vec) = stmt.kind {
-        if stmt_vec.is_empty() {
-            return Err(error_message(
-                "statement expression returning void is not supported",
-                ctx,
-                loc,
-            ));
-        }
-        if let StmtKind::ExprStmt(expr) = &stmt_vec.last().unwrap().kind {
-            let ty = Rc::clone(&expr.ty);
-            let expr = Expr {
-                kind: ExprKind::StmtExpr(stmt_vec),
-                ty,
-                loc,
-            };
-            return Ok(Box::new(expr));
-        } else {
-            return Err(error_message(
-                "statement expression returning void is not supported",
-                ctx,
-                loc,
-            ));
-        }
+    let body = stmt.get_body();
+    if body.is_empty() {
+        return Err(error_message(
+            "statement expression returning void is not supported",
+            ctx,
+            loc,
+        ));
+    }
+    if let StmtKind::ExprStmt(last_expr) = &body.last().unwrap().kind {
+        let ty = Rc::clone(&last_expr.ty);
+        let expr = Expr {
+            kind: ExprKind::StmtExpr(body),
+            ty,
+            loc,
+        };
+        return Ok(Box::new(expr));
     } else {
-        unreachable!();
+        return Err(error_message(
+            "statement expression returning void is not supported",
+            ctx,
+            loc,
+        ));
     }
 }
 
@@ -1035,18 +1030,18 @@ fn stmt_expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let loc = tok.loc;
 
-    if tokenize::consume(tok, "(") {
+    if tokenize::consume_punct(tok, "(") {
         let inner;
-        if tokenize::equal(tok, "{") {
+        if tokenize::equal_punct(tok, "{") {
             inner = stmt_expr(tok, ctx)?;
         } else {
             inner = expr(tok, ctx)?
         }
-        tokenize::expect(tok, ")", ctx)?;
+        tokenize::expect_punct(tok, ")", ctx)?;
         return Ok(inner);
     }
 
-    if tokenize::consume(tok, "sizeof") {
+    if tokenize::consume_punct(tok, "sizeof") {
         let expr = unary(tok, ctx)?;
         return Ok(Expr::new_num(expr.ty.borrow().size as i64, loc));
     }
@@ -1057,25 +1052,22 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 
     if let Some(ident) = tokenize::consume_ident(tok) {
         // Function call
-        if tokenize::consume(tok, "(") {
+        if tokenize::consume_punct(tok, "(") {
             let mut args = Vec::new();
-            while !tokenize::consume(tok, ")") {
+            while !tokenize::consume_punct(tok, ")") {
                 if args.len() > 0 {
-                    tokenize::expect(tok, ",", ctx)?;
+                    tokenize::expect_punct(tok, ",", ctx)?;
                 }
                 args.push(assign(tok, ctx)?);
             }
             return Ok(Expr::new_funcall(ident, args, loc));
         }
         // Variable
-        if let Some(obj) = ctx.find_var(&ident) {
-            if matches!(obj.kind, ObjKind::TypeDef) {
-                return Err(error_message("undefined variable", ctx, loc));
-            }
-            return Ok(Expr::new_var(obj, loc));
-        } else {
+        let obj = ctx.find_var(&ident);
+        if obj.is_none() || obj.as_ref().unwrap().is_typedef() {
             return Err(error_message("undefined variable", ctx, loc));
         }
+        return Ok(Expr::new_var(obj.unwrap(), loc));
     }
 
     if let Some(bytes) = tokenize::consume_str(tok) {

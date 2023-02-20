@@ -37,12 +37,12 @@ pub fn at_eof(tok: &Token) -> bool {
     }
 }
 
-pub fn equal(tok: &Token, op: &str) -> bool {
+pub fn equal_punct(tok: &Token, op: &str) -> bool {
     matches!(tok.kind, TokenKind::Punct | TokenKind::Keyword) && tok.text == op
 }
 
-pub fn consume(tok: &mut &Token, op: &str) -> bool {
-    if equal(tok, op) {
+pub fn consume_punct(tok: &mut &Token, op: &str) -> bool {
+    if equal_punct(tok, op) {
         *tok = tok.next.as_ref().unwrap();
         true
     } else {
@@ -50,32 +50,13 @@ pub fn consume(tok: &mut &Token, op: &str) -> bool {
     }
 }
 
-pub fn expect(tok: &mut &Token, op: &str, ctx: &Context) -> Result<()> {
-    if equal(tok, op) {
+pub fn expect_punct(tok: &mut &Token, op: &str, ctx: &Context) -> Result<()> {
+    if equal_punct(tok, op) {
         *tok = tok.next.as_ref().unwrap();
         Ok(())
     } else {
         let msg = format!("'{}' expected", op);
         Err(error_message(&msg, ctx, tok.loc))
-    }
-}
-
-pub fn expect_number(tok: &mut &Token, ctx: &Context) -> Result<i64> {
-    if let TokenKind::Num(val) = tok.kind {
-        *tok = tok.next.as_ref().unwrap();
-        Ok(val)
-    } else {
-        Err(error_message("expected a number", ctx, tok.loc))
-    }
-}
-
-pub fn expect_ident<'a>(tok: &mut &'a Token, ctx: &Context) -> Result<&'a str> {
-    if matches!(tok.kind, TokenKind::Ident) {
-        let text = &tok.text;
-        *tok = tok.next.as_ref().unwrap();
-        Ok(text)
-    } else {
-        Err(error_message("expected an identifier", ctx, tok.loc))
     }
 }
 
@@ -88,6 +69,19 @@ pub fn consume_number(tok: &mut &Token) -> Option<i64> {
     }
 }
 
+pub fn expect_number(tok: &mut &Token, ctx: &Context) -> Result<i64> {
+    if let TokenKind::Num(val) = tok.kind {
+        *tok = tok.next.as_ref().unwrap();
+        Ok(val)
+    } else {
+        Err(error_message("expected a number", ctx, tok.loc))
+    }
+}
+
+pub fn equal_ident(tok: &Token) -> bool {
+    matches!(tok.kind, TokenKind::Ident)
+}
+
 pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a str> {
     if matches!(tok.kind, TokenKind::Ident) {
         let text = &tok.text;
@@ -95,6 +89,16 @@ pub fn consume_ident<'a>(tok: &mut &'a Token) -> Option<&'a str> {
         Some(text)
     } else {
         None
+    }
+}
+
+pub fn expect_ident<'a>(tok: &mut &'a Token, ctx: &Context) -> Result<&'a str> {
+    if matches!(tok.kind, TokenKind::Ident) {
+        let text = &tok.text;
+        *tok = tok.next.as_ref().unwrap();
+        Ok(text)
+    } else {
+        Err(error_message("expected an identifier", ctx, tok.loc))
     }
 }
 

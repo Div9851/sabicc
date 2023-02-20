@@ -191,12 +191,6 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
     let mut output = String::new();
     writeln!(&mut output, "  .loc 1 {}", ctx.line_no[stmt.loc] + 1).unwrap();
     match &stmt.kind {
-        StmtKind::DeclStmt(stmt_vec) => {
-            for stmt in stmt_vec {
-                write!(&mut output, "{}", gen_stmt(stmt, ctx)?).unwrap();
-            }
-            Ok(output)
-        }
         StmtKind::NullStmt => Ok(output),
         StmtKind::ExprStmt(expr) => {
             write!(&mut output, "{}", gen_expr(expr, ctx)?).unwrap();

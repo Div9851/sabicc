@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 #[derive(Clone)]
 pub enum ObjKind {
-    Local(usize),   // offset from RBP
-    Global(String), // label
+    Local(usize),
+    Global(String),
     TypeDef,
 }
 
@@ -18,6 +18,12 @@ pub enum ObjKind {
 pub struct Obj {
     pub kind: ObjKind,
     pub ty: Rc<RefCell<Type>>,
+}
+
+impl Obj {
+    fn is_typedef(&self) -> bool {
+        matches!(self.kind, ObjKind::TypeDef)
+    }
 }
 
 pub struct Member {
@@ -205,13 +211,7 @@ impl Type {
     }
 
     pub fn is_func(&self) -> bool {
-        matches!(
-            self.kind,
-            TypeKind::Func {
-                params: _,
-                return_ty: _,
-            }
-        )
+        matches!(self.kind, TypeKind::Func { .. })
     }
 
     pub fn is_struct(&self) -> bool {
@@ -287,8 +287,9 @@ impl Context {
     pub fn new_lvar(&mut self, decl: &Decl) -> Obj {
         self.stack_size += decl.ty.borrow().size;
         self.stack_size = align_to(self.stack_size, decl.ty.borrow().align);
+        let offset = self.stack_size;
         let obj = Obj {
-            kind: ObjKind::Local(self.stack_size),
+            kind: ObjKind::Local(offset),
             ty: Rc::clone(&decl.ty),
         };
         self.scopes
