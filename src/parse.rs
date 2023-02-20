@@ -9,15 +9,15 @@ use crate::{
 };
 
 pub struct Program {
-    pub functions: Vec<Box<Func>>,
+    pub funcs: Vec<Box<Func>>,
     pub ctx: Context,
 }
 
 impl Program {
     fn new(text: String, filename: String) -> Program {
-        let functions = Vec::new();
+        let funcs = Vec::new();
         let ctx = Context::new(text, filename);
-        Program { functions, ctx }
+        Program { funcs, ctx }
     }
 }
 
@@ -330,10 +330,10 @@ pub fn program(text: String, filename: &str) -> Result<Program> {
     while !tokenize::at_eof(tok) {
         let spec = declspec(&mut tok, &mut program.ctx, true)?;
         // Function
-        if is_function_definition(&mut tok, &mut program.ctx)? {
+        if is_func_def(&mut tok, &mut program.ctx)? {
             program
-                .functions
-                .push(function(&mut tok, &spec.ty, &mut program.ctx)?);
+                .funcs
+                .push(func(&mut tok, &spec.ty, &mut program.ctx)?);
             continue;
         }
         // Global variable or function declaration
@@ -359,11 +359,7 @@ fn global_variable(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Cont
     Ok(())
 }
 
-pub fn function(
-    tok: &mut &Token,
-    base_ty: &Rc<RefCell<Type>>,
-    ctx: &mut Context,
-) -> Result<Box<Func>> {
+pub fn func(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<Box<Func>> {
     ctx.stack_size = 0;
     ctx.enter_scope();
     let loc = tok.loc;
@@ -396,7 +392,7 @@ pub fn function(
 
 // Lookahead tokens and returns true if a given token is a start
 // of a function definition
-fn is_function_definition(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
+fn is_func_def(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
     if tokenize::equal(tok, ";") {
         return Ok(false);
     }

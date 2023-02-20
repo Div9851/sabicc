@@ -3,6 +3,7 @@ use crate::{error_message, Context, Obj, ObjKind, Type, TypeKind};
 
 use anyhow::{bail, Result};
 use std::cell::RefCell;
+use std::fmt::Write;
 use std::unreachable;
 
 static ARGREG64: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -20,74 +21,75 @@ fn pop(reg: &str) -> String {
 
 // Store rax to an address that the stack top is pointing to.
 fn store(ty: &RefCell<Type>) -> String {
-    let mut text = String::new();
-    text += &pop("rdi");
+    let mut output = String::new();
+    write!(&mut output, "{}", pop("rdi")).unwrap();
 
     if ty.borrow().is_struct() || ty.borrow().is_union() {
         for i in 0..ty.borrow().size {
-            text += &format!("  mov r8b, [rax+{}]\n", i);
-            text += &format!("  mov [rdi+{}], r8b\n", i);
+            writeln!(&mut output, "  mov r8b, [rax+{}]", i).unwrap();
+            writeln!(&mut output, "  mov [rdi+{}], r8b", i).unwrap();
         }
-        return text;
+        return output;
     }
 
     if ty.borrow().size == 1 {
-        text += "  mov [rdi], al\n";
+        writeln!(&mut output, "  mov [rdi], al").unwrap();
     } else if ty.borrow().size == 2 {
-        text += "  mov [rdi], ax\n";
+        writeln!(&mut output, "  mov [rdi], ax").unwrap();
     } else if ty.borrow().size == 4 {
-        text += "   mov [rdi], eax\n";
+        writeln!(&mut output, "  mov [rdi], eax").unwrap();
     } else {
-        text += "  mov [rdi], rax\n";
+        writeln!(&mut output, "  mov [rdi], rax").unwrap();
     }
-    text
+    output
 }
 
 // Compute the absolute address to a given node.
 // It's an error if a given node does not reside in memory.
 fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
-    let mut text = String::new();
+    let mut output = String::new();
     match &expr.kind {
         ExprKind::Var(obj) => {
             match &obj.kind {
                 ObjKind::Local(offset) => {
-                    text += &format!("  lea rax, [rbp-{}]\n", offset);
+                    writeln!(&mut output, "  lea rax, [rbp-{}]", offset).unwrap();
                 }
                 ObjKind::Global(name) => {
-                    text += &format!("  lea rax, {}[rip]\n", name);
+                    writeln!(&mut output, "  lea rax, {}[rip]", name).unwrap();
                 }
                 _ => {
                     unreachable!();
                 }
             }
-            return Ok(text);
+            return Ok(output);
         }
         ExprKind::Unary {
             op: UnaryOp::DEREF,
             expr,
         } => {
-            text += &gen_expr(expr, ctx)?;
-            return Ok(text);
+            write!(&mut output, "{}", gen_expr(expr, ctx)?).unwrap();
+            return Ok(output);
         }
         ExprKind::Binary {
             op: BinaryOp::COMMA,
             lhs,
             rhs,
         } => {
-            text += &gen_expr(lhs, ctx)?;
-            text += &gen_addr(rhs, ctx)?;
-            return Ok(text);
+            write!(&mut output, "{}", gen_expr(lhs, ctx)?).unwrap();
+            write!(&mut output, "{}", gen_addr(rhs, ctx)?).unwrap();
+            return Ok(output);
         }
         ExprKind::Member { expr, offset } => {
-            text += &gen_addr(expr, ctx)?;
-            text += &format!("  add rax, {}\n", offset);
-            return Ok(text);
+            write!(&mut output, "{}", gen_addr(expr, ctx)?).unwrap();
+            writeln!(&mut output, "  add rax, {}", offset).unwrap();
+            return Ok(output);
         }
         _ => bail!(error_message("not an lvalue", ctx, expr.loc)),
     }
 }
 
 fn load(ty: &RefCell<Type>) -> String {
+    let mut output = String::new();
     if let TypeKind::Array(_, _) | TypeKind::Struct(_) | TypeKind::Union(_) = ty.borrow().kind {
         // If it is an array, do not attempt to load a value to the
         // register because in general we can't load an entire array to a
@@ -95,53 +97,54 @@ fn load(ty: &RefCell<Type>) -> String {
         // becomes not the array itself but the address of the array.
         // This is where "array is automatically converted to a pointer to
         // the first element of the array in C" occurs.
-        return "".to_owned();
+        return output;
     }
 
     if ty.borrow().size == 1 {
-        "  movsbq rax, [rax]\n".to_owned()
+        writeln!(&mut output, "  movsbq rax, [rax]").unwrap();
     } else if ty.borrow().size == 2 {
-        "  movswq rax, [rax]\n".to_owned()
+        writeln!(&mut output, "  movswq rax, [rax]").unwrap();
     } else if ty.borrow().size == 4 {
-        "   movsxd rax, [rax]\n".to_owned()
+        writeln!(&mut output, "  movsxd rax, [rax]").unwrap();
     } else {
-        "  mov rax, [rax]\n".to_owned()
+        writeln!(&mut output, "  mov rax, [rax]").unwrap();
     }
+    output
 }
 
 pub fn gen_program(program: &mut Program) -> Result<String> {
-    let mut text = String::new();
-    text += &format!(".file 1 \"{}\"\n", program.ctx.filename);
-    text += ".intel_syntax noprefix\n";
+    let mut output = String::new();
+    writeln!(&mut output, ".file 1 \"{}\"", program.ctx.filename).unwrap();
+    writeln!(&mut output, ".intel_syntax noprefix").unwrap();
     let globals = program.ctx.scopes.first().unwrap();
     for (_, obj) in globals {
-        text += &emit_data(obj, &program.ctx)?;
+        write!(&mut output, "{}", emit_data(obj, &program.ctx)?).unwrap();
     }
-    let functions = &program.functions;
-    for func in functions {
-        text += &emit_text(func, &mut program.ctx)?;
+    let funcs = &program.funcs;
+    for func in funcs {
+        write!(&mut output, "{}", emit_text(func, &mut program.ctx)?).unwrap();
     }
-    Ok(text)
+    Ok(output)
 }
 
 fn emit_data(obj: &Obj, ctx: &Context) -> Result<String> {
-    let mut text = String::new();
+    let mut output = String::new();
     if let ObjKind::Global(name) = &obj.kind {
         if !obj.ty.borrow().is_func() {
-            text += ".data\n";
-            text += &format!(".globl {}\n", name);
-            text += &format!("{}:\n", name);
+            writeln!(&mut output, ".data").unwrap();
+            writeln!(&mut output, ".globl {}", name).unwrap();
+            writeln!(&mut output, "{}:", name).unwrap();
             if let Some(bytes) = ctx.init_data.get(name) {
                 for b in bytes {
-                    text += &format!("  .byte {}\n", b);
+                    writeln!(&mut output, "  .byte {}", b).unwrap();
                 }
-                text += "  .byte 0\n";
+                writeln!(&mut output, "  .byte 0").unwrap();
             } else {
-                text += &format!("  .zero {}\n", obj.ty.borrow().size);
+                writeln!(&mut output, "  .zero {}", obj.ty.borrow().size).unwrap();
             }
         }
     }
-    Ok(text)
+    Ok(output)
 }
 
 fn store_gp(r: usize, offset: usize, sz: usize) -> String {
@@ -159,72 +162,72 @@ fn store_gp(r: usize, offset: usize, sz: usize) -> String {
 }
 
 fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
-    let mut text = String::new();
-    text += &format!(".globl {}\n", func.name);
-    text += &format!(".text\n");
-    text += &format!("{}:\n", func.name);
+    let mut output = String::new();
+    writeln!(&mut output, ".globl {}", func.name).unwrap();
+    writeln!(&mut output, ".text").unwrap();
+    writeln!(&mut output, "{}:", func.name).unwrap();
     // Prologue
-    text += "  push rbp\n";
-    text += "  mov rbp, rsp\n";
-    text += &format!("  sub rsp, {}\n", func.stack_size);
+    writeln!(&mut output, "  push rbp").unwrap();
+    writeln!(&mut output, "  mov rbp, rsp").unwrap();
+    writeln!(&mut output, "  sub rsp, {}", func.stack_size).unwrap();
     // Save passed-by-register arguments to the stack
     for (r, obj) in func.params.iter().enumerate() {
         if let ObjKind::Local(offset) = obj.kind {
-            text += &store_gp(r, offset, obj.ty.borrow().size);
+            write!(&mut output, "{}", store_gp(r, offset, obj.ty.borrow().size)).unwrap();
         } else {
             unreachable!();
         }
     }
     // Body
-    text += &gen_stmt(&func.body, ctx)?;
+    write!(&mut output, "{}", gen_stmt(&func.body, ctx)?).unwrap();
     // Epilogue
-    text += "  mov rsp, rbp\n";
-    text += "  pop rbp\n";
-    text += "  ret\n";
-    Ok(text)
+    writeln!(&mut output, "  mov rsp, rbp").unwrap();
+    writeln!(&mut output, "  pop rbp").unwrap();
+    writeln!(&mut output, "  ret").unwrap();
+    Ok(output)
 }
 
 fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
-    let mut text = String::new();
-    text += &format!("  .loc 1 {}\n", ctx.line_no[stmt.loc] + 1);
+    let mut output = String::new();
+    writeln!(&mut output, "  .loc 1 {}", ctx.line_no[stmt.loc] + 1).unwrap();
     match &stmt.kind {
         StmtKind::DeclStmt(stmt_vec) => {
             for stmt in stmt_vec {
-                text += &gen_stmt(stmt, ctx)?;
+                write!(&mut output, "{}", gen_stmt(stmt, ctx)?).unwrap();
             }
-            Ok(text)
+            Ok(output)
         }
-        StmtKind::NullStmt => Ok(text),
+        StmtKind::NullStmt => Ok(output),
         StmtKind::ExprStmt(expr) => {
-            text += &gen_expr(expr, ctx)?;
-            Ok(text)
+            write!(&mut output, "{}", gen_expr(expr, ctx)?).unwrap();
+            Ok(output)
         }
         StmtKind::ReturnStmt(expr) => {
-            text += &gen_expr(&expr, ctx)?;
-            text += "  mov rsp, rbp\n";
-            text += "  pop rbp\n";
-            text += "  ret\n";
-            Ok(text)
+            write!(&mut output, "{}", gen_expr(&expr, ctx)?).unwrap();
+            writeln!(&mut output, "  mov rsp, rbp").unwrap();
+            writeln!(&mut output, "  pop rbp").unwrap();
+            writeln!(&mut output, "  ret").unwrap();
+            Ok(output)
         }
         StmtKind::CompoundStmt(stmt_vec) => {
             for stmt in stmt_vec {
-                text += &gen_stmt(stmt, ctx)?;
+                write!(&mut output, "{}", gen_stmt(stmt, ctx)?).unwrap();
             }
-            Ok(text)
+            Ok(output)
         }
         StmtKind::IfStmt { cond, then, els } => {
-            text += &gen_expr(&cond, ctx)?;
-            text += "  cmp rax, 0\n";
-            text += &format!("  je .L.else.{}\n", ctx.id);
-            text += &gen_stmt(then, ctx)?;
-            text += &format!("  jmp .L.end.{}\n", ctx.id);
-            text += &format!(".L.else.{}:\n", ctx.id);
+            write!(&mut output, "{}", gen_expr(&cond, ctx)?).unwrap();
+            writeln!(&mut output, "  cmp rax, 0").unwrap();
+            writeln!(&mut output, "  je .L.else.{}", ctx.id).unwrap();
+            write!(&mut output, "{}", gen_stmt(then, ctx)?).unwrap();
+            writeln!(&mut output, "  jmp .L.end.{}", ctx.id).unwrap();
+            writeln!(&mut output, ".L.else.{}:", ctx.id).unwrap();
             if let Some(els) = els {
-                text += &gen_stmt(els, ctx)?;
+                write!(&mut output, "{}", gen_stmt(els, ctx)?).unwrap();
             }
-            text += &format!(".L.end.{}:\n", ctx.id);
+            writeln!(&mut output, ".L.end.{}:", ctx.id).unwrap();
             ctx.id += 1;
-            Ok(text)
+            Ok(output)
         }
         StmtKind::ForStmt {
             init,
@@ -232,98 +235,98 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             inc,
             body,
         } => {
-            text += &gen_stmt(init, ctx)?;
-            text += &format!(".L.begin.{}:\n", ctx.id);
+            write!(&mut output, "{}", gen_stmt(init, ctx)?).unwrap();
+            writeln!(&mut output, ".L.begin.{}:", ctx.id).unwrap();
             if let Some(cond) = cond {
-                text += &gen_expr(cond, ctx)?;
-                text += "  cmp rax, 0\n";
-                text += &format!("  je .L.end.{}\n", ctx.id);
+                write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();
+                writeln!(&mut output, "  cmp rax, 0").unwrap();
+                writeln!(&mut output, "  je .L.end.{}", ctx.id).unwrap();
             }
-            text += &gen_stmt(body, ctx)?;
+            write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
             if let Some(inc) = inc {
-                text += &gen_expr(inc, ctx)?;
+                write!(&mut output, "{}", gen_expr(inc, ctx)?).unwrap();
             }
-            text += &format!("  jmp .L.begin.{}\n", ctx.id);
-            text += &format!(".L.end.{}:\n", ctx.id);
+            writeln!(&mut output, "  jmp .L.begin.{}", ctx.id).unwrap();
+            writeln!(&mut output, ".L.end.{}:", ctx.id).unwrap();
             ctx.id += 1;
-            Ok(text)
+            Ok(output)
         }
         StmtKind::WhileStmt { cond, body } => {
-            text += &format!(".L.begin.{}:\n", ctx.id);
-            text += &gen_expr(cond, ctx)?;
-            text += "  cmp rax, 0\n";
-            text += &format!("  je .L.end.{}\n", ctx.id);
-            text += &gen_stmt(body, ctx)?;
-            text += &format!("  jmp .L.begin.{}\n", ctx.id);
-            text += &format!(".L.end.{}:\n", ctx.id);
+            writeln!(&mut output, ".L.begin.{}:", ctx.id).unwrap();
+            write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();
+            writeln!(&mut output, "  cmp rax, 0").unwrap();
+            writeln!(&mut output, "  je .L.end.{}", ctx.id).unwrap();
+            write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
+            writeln!(&mut output, "  jmp .L.begin.{}", ctx.id).unwrap();
+            writeln!(&mut output, ".L.end.{}:", ctx.id).unwrap();
             ctx.id += 1;
-            Ok(text)
+            Ok(output)
         }
     }
 }
 
 // Generate text for a given node.
 fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
-    let mut text = String::new();
-    text += &format!("  .loc 1 {}\n", ctx.line_no[expr.loc] + 1);
+    let mut output = String::new();
+    writeln!(&mut output, "  .loc 1 {}", ctx.line_no[expr.loc] + 1).unwrap();
     match &expr.kind {
         ExprKind::StmtExpr(stmt_vec) => {
             for stmt in stmt_vec {
-                text += &gen_stmt(stmt, ctx)?;
+                write!(&mut output, "{}", gen_stmt(stmt, ctx)?).unwrap();
             }
         }
         ExprKind::Assign { lhs, rhs } => {
-            text += &gen_addr(&lhs, ctx)?;
-            text += &push();
-            text += &gen_expr(&rhs, ctx)?;
-            text += &store(&expr.ty);
+            write!(&mut output, "{}", gen_addr(&lhs, ctx)?).unwrap();
+            write!(&mut output, "{}", push()).unwrap();
+            write!(&mut output, "{}", gen_expr(&rhs, ctx)?).unwrap();
+            write!(&mut output, "{}", store(&expr.ty)).unwrap();
         }
         ExprKind::Binary {
             op: BinaryOp::COMMA,
             lhs,
             rhs,
         } => {
-            text += &gen_expr(&lhs, ctx)?;
-            text += &gen_expr(&rhs, ctx)?;
+            write!(&mut output, "{}", gen_expr(&lhs, ctx)?).unwrap();
+            write!(&mut output, "{}", gen_expr(&rhs, ctx)?).unwrap();
         }
         ExprKind::Binary { op, lhs, rhs } => {
-            text += &gen_expr(&rhs, ctx)?;
-            text += &push();
-            text += &gen_expr(&lhs, ctx)?;
-            text += &pop("rdi");
+            write!(&mut output, "{}", gen_expr(&rhs, ctx)?).unwrap();
+            write!(&mut output, "{}", push()).unwrap();
+            write!(&mut output, "{}", gen_expr(&lhs, ctx)?).unwrap();
+            write!(&mut output, "{}", pop("rdi")).unwrap();
             match op {
                 BinaryOp::ADD => {
-                    text += "  add rax, rdi\n";
+                    writeln!(&mut output, "  add rax, rdi").unwrap();
                 }
                 BinaryOp::SUB => {
-                    text += "  sub rax, rdi\n";
+                    writeln!(&mut output, "  sub rax, rdi").unwrap();
                 }
                 BinaryOp::MUL => {
-                    text += "  imul rax, rdi\n";
+                    writeln!(&mut output, "  imul rax, rdi").unwrap();
                 }
                 BinaryOp::DIV => {
-                    text += "  cqo\n";
-                    text += "  idiv rdi\n";
+                    writeln!(&mut output, "  cqo").unwrap();
+                    writeln!(&mut output, "  idiv rdi").unwrap();
                 }
                 BinaryOp::EQ => {
-                    text += "  cmp rax, rdi\n";
-                    text += "  sete al\n";
-                    text += "  movzb rax, al\n";
+                    writeln!(&mut output, "  cmp rax, rdi").unwrap();
+                    writeln!(&mut output, "  sete al").unwrap();
+                    writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
                 BinaryOp::NE => {
-                    text += "  cmp rax, rdi\n";
-                    text += "  setne al\n";
-                    text += "  movzb rax, al\n";
+                    writeln!(&mut output, "  cmp rax, rdi").unwrap();
+                    writeln!(&mut output, "  setne al").unwrap();
+                    writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
                 BinaryOp::LT => {
-                    text += "  cmp rax, rdi\n";
-                    text += "  setl al\n";
-                    text += "  movzb rax, al\n";
+                    writeln!(&mut output, "  cmp rax, rdi").unwrap();
+                    writeln!(&mut output, "  setl al").unwrap();
+                    writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
                 BinaryOp::LE => {
-                    text += "  cmp rax, rdi\n";
-                    text += "  setle al\n";
-                    text += "  movzb rax, al\n";
+                    writeln!(&mut output, "  cmp rax, rdi").unwrap();
+                    writeln!(&mut output, "  setle al").unwrap();
+                    writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
                 BinaryOp::COMMA => {}
             };
@@ -331,43 +334,43 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
         ExprKind::Unary { op, expr: operand } => {
             match op {
                 UnaryOp::NEG => {
-                    text += &gen_expr(&operand, ctx)?;
-                    text += "  neg rax\n";
+                    write!(&mut output, "{}", gen_expr(&operand, ctx)?).unwrap();
+                    writeln!(&mut output, "  neg rax").unwrap();
                 }
                 UnaryOp::DEREF => {
-                    text += &gen_expr(&operand, ctx)?;
-                    text += &load(&expr.ty);
+                    write!(&mut output, "{}", gen_expr(&operand, ctx)?).unwrap();
+                    write!(&mut output, "{}", load(&expr.ty)).unwrap();
                 }
                 UnaryOp::ADDR => {
-                    text += &gen_addr(&operand, ctx)?;
+                    write!(&mut output, "{}", gen_addr(&operand, ctx)?).unwrap();
                 }
             };
         }
         ExprKind::Member { expr: _, offset: _ } => {
-            text += &gen_addr(expr, ctx)?;
-            text += &load(&expr.ty);
+            write!(&mut output, "{}", gen_addr(expr, ctx)?).unwrap();
+            write!(&mut output, "{}", load(&expr.ty)).unwrap();
         }
         ExprKind::Var(_) => {
-            text += &gen_addr(expr, ctx)?;
-            text += &load(&expr.ty);
+            write!(&mut output, "{}", gen_addr(expr, ctx)?).unwrap();
+            write!(&mut output, "{}", load(&expr.ty)).unwrap();
         }
         ExprKind::Num(val) => {
-            text += &format!("  mov rax, {}\n", val);
+            writeln!(&mut output, "  mov rax, {}", val).unwrap();
         }
         ExprKind::FunCall { name, args } => {
             let argreg = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
             let mut nargs = 0;
             for arg in args {
-                text += &gen_expr(arg, ctx)?;
-                text += &push();
+                write!(&mut output, "{}", gen_expr(arg, ctx)?).unwrap();
+                write!(&mut output, "{}", push()).unwrap();
                 nargs += 1;
             }
             for i in (0..nargs).rev() {
-                text += &pop(argreg[i]);
+                write!(&mut output, "{}", pop(argreg[i])).unwrap();
             }
             // todo: RSP must be align to 16
-            text += &format!("  call {}\n", name);
+            writeln!(&mut output, "  call {}", name).unwrap();
         }
     };
-    Ok(text)
+    Ok(output)
 }
