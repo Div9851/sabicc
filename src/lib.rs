@@ -2,6 +2,7 @@ pub mod codegen;
 pub mod parse;
 pub mod tokenize;
 
+use anyhow::{anyhow, Error};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -367,17 +368,18 @@ impl Context {
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-fn error_message(msg: &str, ctx: &Context, pos: usize) -> String {
+fn error_message(msg: &str, ctx: &Context, pos: usize) -> Error {
     let filename = &ctx.filename;
     let line_no = ctx.line_no[pos];
     let line_start_pos = ctx.line_start_pos[line_no];
     let line_end_pos = ctx.line_end_pos[line_no];
-    let info = format!("{}:{}: ", filename, line_no + 1);
-    format!(
+    let error_at = format!("{}:{}: ", filename, line_no + 1);
+    let indent = error_at.len() + pos - line_start_pos;
+    anyhow!(
         "\n{}{}\n{}^ {}",
-        info,
+        error_at,
         &ctx.text[line_start_pos..line_end_pos],
-        " ".repeat(info.len() + pos - line_start_pos),
+        " ".repeat(indent),
         msg
     )
 }

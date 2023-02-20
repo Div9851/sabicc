@@ -1,7 +1,7 @@
 use crate::parse::{BinaryOp, Expr, ExprKind, Func, Program, Stmt, StmtKind, UnaryOp};
 use crate::{error_message, Context, Obj, ObjKind, Type, TypeKind};
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::cell::RefCell;
 use std::fmt::Write;
 use std::unreachable;
@@ -61,14 +61,14 @@ fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                     unreachable!();
                 }
             }
-            return Ok(output);
+            Ok(output)
         }
         ExprKind::Unary {
             op: UnaryOp::DEREF,
             expr,
         } => {
             write!(&mut output, "{}", gen_expr(expr, ctx)?).unwrap();
-            return Ok(output);
+            Ok(output)
         }
         ExprKind::Binary {
             op: BinaryOp::COMMA,
@@ -77,14 +77,14 @@ fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
         } => {
             write!(&mut output, "{}", gen_expr(lhs, ctx)?).unwrap();
             write!(&mut output, "{}", gen_addr(rhs, ctx)?).unwrap();
-            return Ok(output);
+            Ok(output)
         }
         ExprKind::Member { expr, offset } => {
             write!(&mut output, "{}", gen_addr(expr, ctx)?).unwrap();
             writeln!(&mut output, "  add rax, {}", offset).unwrap();
-            return Ok(output);
+            Ok(output)
         }
-        _ => bail!(error_message("not an lvalue", ctx, expr.loc)),
+        _ => Err(error_message("not an lvalue", ctx, expr.loc)),
     }
 }
 

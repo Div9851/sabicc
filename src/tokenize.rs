@@ -1,5 +1,5 @@
 use crate::{error_message, Context};
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 pub enum TokenKind {
     Ident,        // Identifiers
@@ -56,7 +56,7 @@ pub fn expect(tok: &mut &Token, op: &str, ctx: &Context) -> Result<()> {
         Ok(())
     } else {
         let msg = format!("'{}' expected", op);
-        bail!(error_message(&msg, ctx, tok.loc));
+        Err(error_message(&msg, ctx, tok.loc))
     }
 }
 
@@ -65,7 +65,7 @@ pub fn expect_number(tok: &mut &Token, ctx: &Context) -> Result<i64> {
         *tok = tok.next.as_ref().unwrap();
         Ok(val)
     } else {
-        bail!(error_message("expected a number", ctx, tok.loc));
+        Err(error_message("expected a number", ctx, tok.loc))
     }
 }
 
@@ -75,7 +75,7 @@ pub fn expect_ident<'a>(tok: &mut &'a Token, ctx: &Context) -> Result<&'a str> {
         *tok = tok.next.as_ref().unwrap();
         Ok(text)
     } else {
-        bail!(error_message("expected an identifier", ctx, tok.loc))
+        Err(error_message("expected an identifier", ctx, tok.loc))
     }
 }
 
@@ -173,7 +173,7 @@ fn from_hex(ch: u8) -> u8 {
 
 fn read_escaped_char(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<u8> {
     if bytes[*pos] == b'\0' {
-        bail!(error_message("unexpected end of file", ctx, *pos));
+        return Err(error_message("unexpected end of file", ctx, *pos));
     }
     if is_octdigit(bytes[*pos]) {
         let mut c = bytes[*pos] - b'0';
@@ -198,7 +198,7 @@ fn read_escaped_char(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<u8>
             }
             Ok(c)
         } else {
-            bail!(error_message("invalid hex escape sequence", ctx, *pos));
+            Err(error_message("invalid hex escape sequence", ctx, *pos))
         }
     } else if bytes[*pos] == b'a' {
         *pos += 1;
@@ -250,7 +250,7 @@ fn read_string_literal(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<V
         s.push(bytes[*pos]);
         *pos += 1;
     }
-    bail!(error_message("unclosed string literal", ctx, *pos));
+    Err(error_message("unclosed string literal", ctx, *pos))
 }
 
 pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
@@ -277,7 +277,7 @@ pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
                 pos += 1;
             }
             if bytes[pos] == b'\0' {
-                bail!(error_message("unclosed block comment", ctx, loc));
+                return Err(error_message("unclosed block comment", ctx, loc));
             }
             pos += 2;
             continue;
@@ -336,7 +336,7 @@ pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
             continue;
         }
 
-        bail!(error_message("invalid token", ctx, pos));
+        return Err(error_message("invalid token", ctx, pos));
     }
     cur.next = Some(Token::new(TokenKind::EOF, pos, ""));
 

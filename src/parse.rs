@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
@@ -187,7 +187,7 @@ impl Expr {
             result_ty = Rc::clone(&lhs.ty);
         } else {
             // `ptr + ptr`
-            bail!(error_message("invalid operands", ctx, loc));
+            return Err(error_message("invalid operands", ctx, loc));
         }
         Ok(Box::new(Expr {
             kind: ExprKind::Binary {
@@ -218,7 +218,7 @@ impl Expr {
             result_ty = Rc::clone(&lhs.ty);
         } else if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_ptr() {
             // `int - ptr`
-            bail!(error_message("invalid operands", ctx, loc));
+            return Err(error_message("invalid operands", ctx, loc));
         } else {
             // `ptr - ptr`
             // todo: type check
@@ -247,19 +247,19 @@ impl Expr {
                 if expr.ty.borrow().is_integer() {
                     result_ty = Type::new_int();
                 } else {
-                    bail!(error_message("invalid operand", ctx, loc));
+                    return Err(error_message("invalid operand", ctx, loc));
                 }
             }
             UnaryOp::DEREF => {
                 if expr.ty.borrow().is_ptr() {
                     if let TypeKind::Ptr(base_ty) = &expr.ty.borrow().kind {
                         if base_ty.borrow().is_void() {
-                            bail!(error_message("dereferencing a void pointer", ctx, loc));
+                            return Err(error_message("dereferencing a void pointer", ctx, loc));
                         }
                     }
                     result_ty = Rc::clone(expr.ty.borrow().get_base_ty());
                 } else {
-                    bail!(error_message("invalid pointer dereference", ctx, loc));
+                    return Err(error_message("invalid pointer dereference", ctx, loc));
                 }
             }
             UnaryOp::ADDR => {
@@ -281,10 +281,10 @@ impl Expr {
                 offset = member.offset;
                 ty = Rc::clone(&member.ty);
             } else {
-                bail!(error_message("no such member", ctx, loc));
+                return Err(error_message("no such member", ctx, loc));
             }
         } else {
-            bail!(error_message("not struct nor union", ctx, expr.loc));
+            return Err(error_message("not struct nor union", ctx, expr.loc));
         }
         Ok(Box::new(Expr {
             kind: ExprKind::Member { expr, offset },
@@ -386,7 +386,7 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) ->
             stack_size: ctx.stack_size,
         }))
     } else {
-        bail!(error_message("expected a function", ctx, loc));
+        return Err(error_message("expected a function", ctx, loc));
     }
 }
 
@@ -444,7 +444,7 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
         // Handle "typedef" keyword
         if tokenize::equal(tok, "typedef") {
             if !accept_attr {
-                bail!(error_message(
+                return Err(error_message(
                     "storage class specifier is not allowed in this context",
                     ctx,
                     tok.loc,
@@ -507,7 +507,7 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
                 ty = Type::new_long();
             }
             _ => {
-                bail!(error_message("invalid type", ctx, tok.loc));
+                return Err(error_message("invalid type", ctx, tok.loc));
             }
         }
     }
@@ -541,15 +541,15 @@ fn union_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> 
         let tag = tag.unwrap();
         if let Some(ty) = ctx.find_tag(tag) {
             if !ty.borrow().is_union() {
-                bail!(error_message(
+                return Err(error_message(
                     &format!("'{}' defined as wrong kind of tag", tag),
                     ctx,
-                    loc
+                    loc,
                 ));
             }
             return Ok(ty);
         }
-        bail!(error_message("unknown union type", ctx, loc));
+        return Err(error_message("unknown union type", ctx, loc));
     }
     let member_decls = struct_members(tok, ctx)?;
     let ty = Type::new_union(member_decls);
@@ -567,15 +567,15 @@ fn struct_decl(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>>
         let tag = tag.unwrap();
         if let Some(ty) = ctx.find_tag(tag) {
             if !ty.borrow().is_struct() {
-                bail!(error_message(
+                return Err(error_message(
                     &format!("'{}' defined as wrong kind of tag", tag),
                     ctx,
-                    loc
+                    loc,
                 ));
             }
             return Ok(ty);
         }
-        bail!(error_message("unknown struct type", ctx, loc));
+        return Err(error_message("unknown struct type", ctx, loc));
     }
     let member_decls = struct_members(tok, ctx)?;
     let ty = Type::new_struct(member_decls);
@@ -638,7 +638,7 @@ fn declarator(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) 
         return declarator(&mut cur, &ty, ctx);
     }
     if !matches!(tok.kind, TokenKind::Ident) {
-        bail!(error_message("expected an identifier", ctx, tok.loc));
+        return Err(error_message("expected an identifier", ctx, tok.loc));
     }
     if let Some(ident) = tokenize::consume_ident(tok) {
         ty = type_suffix(tok, &ty, ctx)?;
@@ -647,7 +647,7 @@ fn declarator(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) 
             ty,
         })
     } else {
-        bail!(error_message("expected an identifier", ctx, tok.loc));
+        return Err(error_message("expected an identifier", ctx, tok.loc));
     }
 }
 
@@ -682,7 +682,7 @@ fn declaration(
         let loc = tok.loc;
         let decl = declarator(tok, base_ty, ctx)?;
         if decl.ty.borrow().is_void() {
-            bail!(error_message("variable declared void", ctx, loc));
+            return Err(error_message("variable declared void", ctx, loc));
         }
         let obj = ctx.new_lvar(&decl);
         if tokenize::consume(tok, "=") {
@@ -998,10 +998,10 @@ fn stmt_expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let stmt = compound_stmt(tok, ctx)?;
     if let StmtKind::CompoundStmt(stmt_vec) = stmt.kind {
         if stmt_vec.is_empty() {
-            bail!(error_message(
+            return Err(error_message(
                 "statement expression returning void is not supported",
                 ctx,
-                loc
+                loc,
             ));
         }
         if let StmtKind::ExprStmt(expr) = &stmt_vec.last().unwrap().kind {
@@ -1013,10 +1013,10 @@ fn stmt_expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
             };
             return Ok(Box::new(expr));
         } else {
-            bail!(error_message(
+            return Err(error_message(
                 "statement expression returning void is not supported",
                 ctx,
-                loc
+                loc,
             ));
         }
     } else {
@@ -1070,11 +1070,11 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         // Variable
         if let Some(obj) = ctx.find_var(&ident) {
             if matches!(obj.kind, ObjKind::TypeDef) {
-                bail!(error_message("undefined variable", ctx, loc));
+                return Err(error_message("undefined variable", ctx, loc));
             }
             return Ok(Expr::new_var(obj, loc));
         } else {
-            bail!(error_message("undefined variable", ctx, loc));
+            return Err(error_message("undefined variable", ctx, loc));
         }
     }
 
@@ -1083,5 +1083,5 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         return Ok(Expr::new_var(obj, loc));
     }
 
-    bail!(error_message("expected an expression", ctx, loc))
+    Err(error_message("expected an expression", ctx, loc))
 }
