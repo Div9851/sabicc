@@ -295,37 +295,50 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             write!(&mut output, "{}", push()).unwrap();
             write!(&mut output, "{}", gen_expr(&lhs, ctx)?).unwrap();
             write!(&mut output, "{}", pop("rdi")).unwrap();
+            let ax: &'static str;
+            let di: &'static str;
+            if lhs.ty.borrow().is_long() || lhs.ty.borrow().is_ptr() {
+                ax = "rax";
+                di = "rdi";
+            } else {
+                ax = "eax";
+                di = "edi";
+            }
             match op {
                 BinaryOp::ADD => {
-                    writeln!(&mut output, "  add rax, rdi").unwrap();
+                    writeln!(&mut output, "  add {}, {}", ax, di).unwrap();
                 }
                 BinaryOp::SUB => {
-                    writeln!(&mut output, "  sub rax, rdi").unwrap();
+                    writeln!(&mut output, "  sub {}, {}", ax, di).unwrap();
                 }
                 BinaryOp::MUL => {
-                    writeln!(&mut output, "  imul rax, rdi").unwrap();
+                    writeln!(&mut output, "  imul {}, {}", ax, di).unwrap();
                 }
                 BinaryOp::DIV => {
-                    writeln!(&mut output, "  cqo").unwrap();
-                    writeln!(&mut output, "  idiv rdi").unwrap();
+                    if lhs.ty.borrow().is_long() {
+                        writeln!(&mut output, "  cqo").unwrap();
+                    } else {
+                        writeln!(&mut output, "  cdq").unwrap();
+                    }
+                    writeln!(&mut output, "  idiv {}", di).unwrap();
                 }
                 BinaryOp::EQ => {
-                    writeln!(&mut output, "  cmp rax, rdi").unwrap();
+                    writeln!(&mut output, "  cmp {}, {}", ax, di).unwrap();
                     writeln!(&mut output, "  sete al").unwrap();
                     writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
                 BinaryOp::NE => {
-                    writeln!(&mut output, "  cmp rax, rdi").unwrap();
+                    writeln!(&mut output, "  cmp {}, {}", ax, di).unwrap();
                     writeln!(&mut output, "  setne al").unwrap();
                     writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
                 BinaryOp::LT => {
-                    writeln!(&mut output, "  cmp rax, rdi").unwrap();
+                    writeln!(&mut output, "  cmp {}, {}", ax, di).unwrap();
                     writeln!(&mut output, "  setl al").unwrap();
                     writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
                 BinaryOp::LE => {
-                    writeln!(&mut output, "  cmp rax, rdi").unwrap();
+                    writeln!(&mut output, "  cmp {}, {}", ax, di).unwrap();
                     writeln!(&mut output, "  setle al").unwrap();
                     writeln!(&mut output, "  movzb rax, al").unwrap();
                 }

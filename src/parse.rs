@@ -139,9 +139,10 @@ impl Expr {
             BinaryOp::SUB => Expr::new_sub(lhs, rhs, ctx, loc),
             BinaryOp::MUL | BinaryOp::DIV => {
                 if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
+                    let ty = Rc::clone(&lhs.ty);
                     let expr = Expr {
                         kind: ExprKind::Binary { op, lhs, rhs },
-                        ty: Type::new_int().wrap(),
+                        ty,
                         loc,
                     };
                     Ok(Box::new(expr))
@@ -152,7 +153,7 @@ impl Expr {
             BinaryOp::EQ | BinaryOp::NE | BinaryOp::LT | BinaryOp::LE => {
                 let expr = Expr {
                     kind: ExprKind::Binary { op, lhs, rhs },
-                    ty: Type::new_int().wrap(),
+                    ty: Type::new_long().wrap(),
                     loc,
                 };
                 Ok(Box::new(expr))
@@ -264,7 +265,7 @@ impl Expr {
         match op {
             UnaryOp::NEG => {
                 if expr.ty.borrow().is_integer() {
-                    result_ty = Type::new_int().wrap();
+                    result_ty = Rc::clone(&expr.ty);
                 } else {
                     return Err(error_message("invalid operand", ctx, loc));
                 }
@@ -323,7 +324,7 @@ impl Expr {
     fn new_num(val: i64, loc: usize) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::Num(val),
-            ty: Type::new_int().wrap(),
+            ty: Type::new_long().wrap(),
             loc,
         })
     }

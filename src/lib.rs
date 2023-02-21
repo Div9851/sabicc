@@ -26,12 +26,13 @@ impl Obj {
     }
 }
 
+#[derive(Debug)]
 pub struct Member {
     pub offset: usize,
     pub ty: Rc<RefCell<Type>>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Decl {
     pub name: String,
     pub ty: Rc<RefCell<Type>>,
@@ -46,6 +47,7 @@ pub struct DeclSpec {
     pub attr: VarAttr,
 }
 
+#[derive(Debug)]
 pub enum TypeKind {
     Void,
     Char,
@@ -62,6 +64,7 @@ pub enum TypeKind {
     Union(HashMap<String, Member>),
 }
 
+#[derive(Debug)]
 pub struct Type {
     pub kind: TypeKind,
     pub size: Option<usize>, // sizeof() value
@@ -103,7 +106,7 @@ impl Type {
 
     fn new_long() -> Type {
         Type {
-            kind: TypeKind::Char,
+            kind: TypeKind::Long,
             size: Some(8),
             align: 8,
         }
@@ -206,6 +209,10 @@ impl Type {
             self.kind,
             TypeKind::Char | TypeKind::Short | TypeKind::Int | TypeKind::Long
         )
+    }
+
+    pub fn is_long(&self) -> bool {
+        matches!(self.kind, TypeKind::Long)
     }
 
     pub fn is_ptr(&self) -> bool {
