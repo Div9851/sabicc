@@ -152,6 +152,7 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "union"
         || tok.text == "void"
         || tok.text == "typedef"
+        || tok.text == "_Bool"
     {
         tok.kind = TokenKind::Keyword;
     }
@@ -317,16 +318,6 @@ pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
             continue;
         }
 
-        // Punctuator
-        let punct_len = read_punct(&bytes[pos..]);
-        if punct_len > 0 {
-            let tok = Token::new(TokenKind::Punct, pos, &text[pos..pos + punct_len]);
-            cur.next = Some(tok);
-            cur = cur.next.as_mut().unwrap();
-            pos += punct_len;
-            continue;
-        }
-
         // Identifier or keyword
         if is_ident1(bytes[pos]) {
             let loc = pos;
@@ -337,6 +328,16 @@ pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
             convert_keyword(&mut tok);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
+            continue;
+        }
+
+        // Punctuator
+        let punct_len = read_punct(&bytes[pos..]);
+        if punct_len > 0 {
+            let tok = Token::new(TokenKind::Punct, pos, &text[pos..pos + punct_len]);
+            cur.next = Some(tok);
+            cur = cur.next.as_mut().unwrap();
+            pos += punct_len;
             continue;
         }
 

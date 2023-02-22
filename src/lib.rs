@@ -54,6 +54,7 @@ pub struct DeclSpec {
 #[derive(Debug)]
 pub enum TypeKind {
     Void,
+    Bool,
     Char,
     Short,
     Int,
@@ -80,6 +81,14 @@ impl Type {
         Type {
             kind: TypeKind::Void,
             size: None,
+            align: 1,
+        }
+    }
+
+    fn new_bool() -> Type {
+        Type {
+            kind: TypeKind::Bool,
+            size: Some(1),
             align: 1,
         }
     }
@@ -208,10 +217,14 @@ impl Type {
         matches!(self.kind, TypeKind::Void)
     }
 
+    pub fn is_bool(&self) -> bool {
+        matches!(self.kind, TypeKind::Bool)
+    }
+
     pub fn is_integer(&self) -> bool {
         matches!(
             self.kind,
-            TypeKind::Char | TypeKind::Short | TypeKind::Int | TypeKind::Long
+            TypeKind::Bool | TypeKind::Char | TypeKind::Short | TypeKind::Int | TypeKind::Long
         )
     }
 

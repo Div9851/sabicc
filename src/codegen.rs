@@ -4,6 +4,7 @@ use crate::{error_message, Context, Obj, ObjKind, Type, TypeKind};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::fmt::Write;
+use std::rc::Rc;
 use std::unreachable;
 
 static ARGREG64: [&'static str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -162,6 +163,16 @@ fn store_gp(r: usize, offset: usize, sz: usize) -> String {
     } else {
         unreachable!();
     }
+}
+
+fn cmp_zero(ty: &Rc<RefCell<Type>>) -> String {
+    let mut output = String::new();
+    if ty.borrow().is_integer() && ty.borrow().size.unwrap() <= 4 {
+        writeln!(&mut output, "  cmp eax, 0").unwrap();
+    } else {
+        writeln!(&mut output, "  cmp rax, 0").unwrap();
+    }
+    output
 }
 
 fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
@@ -386,7 +397,13 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             let i32i16 = "movswl eax, ax";
             let i32i64 = "movsxd rax, eax";
 
-            writeln!(&mut output, "{}", gen_expr(operand, ctx)?).unwrap();
+            write!(&mut output, "{}", gen_expr(operand, ctx)?).unwrap();
+            if expr.ty.borrow().is_bool() {
+                write!(&mut output, "{}", cmp_zero(&operand.ty)).unwrap();
+                writeln!(&mut output, "  setne al").unwrap();
+                writeln!(&mut output, "  movzx eax, al").unwrap();
+                return Ok(output);
+            }
             let from_ty = &operand.ty.borrow().kind;
             let to_ty = &expr.ty.borrow().kind;
             match from_ty {

@@ -151,6 +151,7 @@ fn usual_arith_conv(lhs: Box<Expr>, rhs: Box<Expr>) -> (Box<Expr>, Box<Expr>) {
 impl Expr {
     fn new_assign(lhs: Box<Expr>, rhs: Box<Expr>, loc: usize) -> Box<Expr> {
         let result_ty = Rc::clone(&lhs.ty);
+        let rhs = Expr::new_cast(rhs, &lhs.ty, loc);
         Box::new(Expr {
             kind: ExprKind::Assign { lhs, rhs },
             ty: result_ty,
@@ -504,11 +505,12 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
     // keyword "void" so far. With this, we can use a match statement
     // as you can see below.
     const VOID: usize = 1 << 0;
-    const CHAR: usize = 1 << 2;
-    const SHORT: usize = 1 << 4;
-    const INT: usize = 1 << 6;
-    const LONG: usize = 1 << 8;
-    const OTHER: usize = 1 << 10;
+    const BOOL: usize = 1 << 2;
+    const CHAR: usize = 1 << 4;
+    const SHORT: usize = 1 << 6;
+    const INT: usize = 1 << 8;
+    const LONG: usize = 1 << 10;
+    const OTHER: usize = 1 << 12;
     const SHORT_INT: usize = SHORT + INT;
     const LONG_INT: usize = LONG + INT;
     const LONG_LONG: usize = LONG + LONG;
@@ -555,6 +557,9 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
         if tokenize::consume_punct(tok, "void") {
             counter += VOID;
         }
+        if tokenize::consume_punct(tok, "_Bool") {
+            counter += BOOL;
+        }
         if tokenize::consume_punct(tok, "char") {
             counter += CHAR;
         }
@@ -570,6 +575,9 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
         match counter {
             VOID => {
                 ty = Type::new_void().wrap();
+            }
+            BOOL => {
+                ty = Type::new_bool().wrap();
             }
             CHAR => {
                 ty = Type::new_char().wrap();
@@ -716,6 +724,7 @@ fn is_typename(tok: &Token, ctx: &Context) -> bool {
         return obj.is_some() && obj.unwrap().is_typedef();
     }
     tokenize::equal_punct(tok, "void")
+        || tokenize::equal_punct(tok, "_Bool")
         || tokenize::equal_punct(tok, "char")
         || tokenize::equal_punct(tok, "short")
         || tokenize::equal_punct(tok, "int")
