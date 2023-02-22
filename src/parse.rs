@@ -1197,15 +1197,20 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
             if !obj.is_global() || !obj.ty.borrow().is_func() {
                 return Err(error_message("not a function", ctx, loc));
             }
+            let ty = obj.ty.borrow();
+            let return_ty = ty.get_return_ty();
+            let mut params = ty.get_params().iter();
             let mut args = Vec::new();
             while !tokenize::consume_punct(tok, ")") {
+                let loc = tok.loc;
                 if args.len() > 0 {
                     tokenize::expect_punct(tok, ",", ctx)?;
                 }
-                args.push(assign(tok, ctx)?);
+                let param = params.next().unwrap();
+                let mut arg = assign(tok, ctx)?;
+                arg = Expr::new_cast(arg, &param.ty, loc);
+                args.push(arg);
             }
-            let ty = obj.ty.borrow();
-            let return_ty = ty.get_return_ty();
             return Ok(Expr::new_funcall(ident, args, return_ty, loc));
         }
         // Variable
