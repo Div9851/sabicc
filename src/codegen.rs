@@ -64,20 +64,16 @@ fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             }
             Ok(output)
         }
+        ExprKind::Comma { lhs, rhs } => {
+            write!(&mut output, "{}", gen_expr(lhs, ctx)?).unwrap();
+            write!(&mut output, "{}", gen_addr(rhs, ctx)?).unwrap();
+            Ok(output)
+        }
         ExprKind::Unary {
             op: UnaryOp::DEREF,
             expr,
         } => {
             write!(&mut output, "{}", gen_expr(expr, ctx)?).unwrap();
-            Ok(output)
-        }
-        ExprKind::Binary {
-            op: BinaryOp::COMMA,
-            lhs,
-            rhs,
-        } => {
-            write!(&mut output, "{}", gen_expr(lhs, ctx)?).unwrap();
-            write!(&mut output, "{}", gen_addr(rhs, ctx)?).unwrap();
             Ok(output)
         }
         ExprKind::Member { expr, offset } => {
@@ -101,11 +97,16 @@ fn load(ty: &RefCell<Type>) -> String {
         return output;
     }
 
+    // When we load a char or a short value to a register, we always
+    // extend them to the size of int, so we can assume the lower half of
+    // a register always contains a valid value. The upper half of a
+    // register for char, short and int may contain garbage. When we load
+    // a long value to a register, it simply occupies the entire register.
     let size = ty.borrow().size.unwrap();
     if size == 1 {
-        writeln!(&mut output, "  movsbq rax, [rax]").unwrap();
+        writeln!(&mut output, "  movsbl eax, [rax]").unwrap();
     } else if size == 2 {
-        writeln!(&mut output, "  movswq rax, [rax]").unwrap();
+        writeln!(&mut output, "  movswl eax, [rax]").unwrap();
     } else if size == 4 {
         writeln!(&mut output, "  movsxd rax, [rax]").unwrap();
     } else {
@@ -282,14 +283,6 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             write!(&mut output, "{}", gen_expr(&rhs, ctx)?).unwrap();
             write!(&mut output, "{}", store(&expr.ty)).unwrap();
         }
-        ExprKind::Binary {
-            op: BinaryOp::COMMA,
-            lhs,
-            rhs,
-        } => {
-            write!(&mut output, "{}", gen_expr(&lhs, ctx)?).unwrap();
-            write!(&mut output, "{}", gen_expr(&rhs, ctx)?).unwrap();
-        }
         ExprKind::Binary { op, lhs, rhs } => {
             write!(&mut output, "{}", gen_expr(&rhs, ctx)?).unwrap();
             write!(&mut output, "{}", push()).unwrap();
@@ -342,7 +335,6 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                     writeln!(&mut output, "  setle al").unwrap();
                     writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
-                BinaryOp::COMMA => {}
             };
         }
         ExprKind::Unary { op, expr: operand } => {
@@ -360,7 +352,11 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                 }
             };
         }
-        ExprKind::Member { expr: _, offset: _ } => {
+        ExprKind::Comma { lhs, rhs } => {
+            write!(&mut output, "{}", gen_expr(&lhs, ctx)?).unwrap();
+            write!(&mut output, "{}", gen_expr(&rhs, ctx)?).unwrap();
+        }
+        ExprKind::Member { .. } => {
             write!(&mut output, "{}", gen_addr(expr, ctx)?).unwrap();
             write!(&mut output, "{}", load(&expr.ty)).unwrap();
         }

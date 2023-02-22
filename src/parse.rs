@@ -66,15 +66,14 @@ impl Stmt {
 
 #[derive(Clone, Copy)]
 pub enum BinaryOp {
-    ADD,   // +
-    SUB,   // -
-    MUL,   // *
-    DIV,   // /
-    EQ,    // ==
-    NE,    // !=
-    LT,    // <
-    LE,    // <=
-    COMMA, // ,
+    ADD, // +
+    SUB, // -
+    MUL, // *
+    DIV, // /
+    EQ,  // ==
+    NE,  // !=
+    LT,  // <
+    LE,  // <=
 }
 
 #[derive(Clone, Copy)]
@@ -99,6 +98,10 @@ pub enum ExprKind {
         op: UnaryOp,
         expr: Box<Expr>,
     },
+    Comma {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     Member {
         expr: Box<Expr>,
         offset: usize,
@@ -116,6 +119,33 @@ pub struct Expr {
     pub kind: ExprKind,
     pub ty: Rc<RefCell<Type>>,
     pub loc: usize,
+}
+
+fn get_common_type(ty1: &Rc<RefCell<Type>>, ty2: &Rc<RefCell<Type>>) -> Rc<RefCell<Type>> {
+    let ty1_size = ty1.borrow().size.unwrap();
+    let ty2_size = ty2.borrow().size.unwrap();
+    if ty1_size == 8 || ty2_size == 8 {
+        Type::new_long().wrap()
+    } else {
+        Type::new_int().wrap()
+    }
+}
+
+// For many binary operators, we implicitly promote operands so that
+// both operands have the same type. Any integral type smaller than
+// int is always promoted to int. If the type of one operand is larger
+// than the other's (e.g. "long" vs. "int"), the smaller operand will
+// be promoted to match with the other.
+//
+// This operation is called the "usual arithmetic conversion".
+fn usual_arith_conv(lhs: Box<Expr>, rhs: Box<Expr>) -> (Box<Expr>, Box<Expr>) {
+    let ty = get_common_type(&lhs.ty, &rhs.ty);
+    let lhs_loc = lhs.loc;
+    let rhs_loc = rhs.loc;
+    (
+        Expr::new_cast(lhs, &ty, lhs_loc),
+        Expr::new_cast(rhs, &ty, rhs_loc),
+    )
 }
 
 impl Expr {
@@ -140,6 +170,7 @@ impl Expr {
             BinaryOp::SUB => Expr::new_sub(lhs, rhs, ctx, loc),
             BinaryOp::MUL | BinaryOp::DIV => {
                 if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
+                    let (lhs, rhs) = usual_arith_conv(lhs, rhs);
                     let ty = Rc::clone(&lhs.ty);
                     let expr = Expr {
                         kind: ExprKind::Binary { op, lhs, rhs },
@@ -148,22 +179,14 @@ impl Expr {
                     };
                     Ok(Box::new(expr))
                 } else {
-                    panic!("invalid operands");
+                    Err(error_message("invalid operands", ctx, loc))
                 }
             }
             BinaryOp::EQ | BinaryOp::NE | BinaryOp::LT | BinaryOp::LE => {
+                let (lhs, rhs) = usual_arith_conv(lhs, rhs);
                 let expr = Expr {
                     kind: ExprKind::Binary { op, lhs, rhs },
-                    ty: Type::new_long().wrap(),
-                    loc,
-                };
-                Ok(Box::new(expr))
-            }
-            BinaryOp::COMMA => {
-                let ty = Rc::clone(&rhs.ty);
-                let expr = Expr {
-                    kind: ExprKind::Binary { op, lhs, rhs },
-                    ty,
+                    ty: Type::new_int().wrap(),
                     loc,
                 };
                 Ok(Box::new(expr))
@@ -182,10 +205,11 @@ impl Expr {
         }
         let result_ty;
         if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
-            // `int + int`
-            result_ty = Type::new_int().wrap();
+            // `integer + integer`
+            (lhs, rhs) = usual_arith_conv(lhs, rhs);
+            result_ty = Rc::clone(&lhs.ty);
         } else if lhs.ty.borrow().is_ptr() && rhs.ty.borrow().is_integer() {
-            // `ptr + int`
+            // `ptr + integer`
             let size = lhs.ty.borrow().get_base_ty().borrow().size;
             if size.is_none() {
                 return Err(error_message("invalid operands", ctx, loc));
@@ -193,13 +217,12 @@ impl Expr {
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
                 rhs,
-                Expr::new_num(size.unwrap() as i64, loc),
+                Expr::new_long(size.unwrap() as i64, loc),
                 ctx,
                 loc,
             )?;
             result_ty = Rc::clone(&lhs.ty);
         } else {
-            // `ptr + ptr`
             return Err(error_message("invalid operands", ctx, loc));
         }
         Ok(Box::new(Expr {
@@ -213,14 +236,20 @@ impl Expr {
         }))
     }
 
-    fn new_sub(lhs: Box<Expr>, mut rhs: Box<Expr>, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
+    fn new_sub(
+        mut lhs: Box<Expr>,
+        mut rhs: Box<Expr>,
+        ctx: &Context,
+        loc: usize,
+    ) -> Result<Box<Expr>> {
         let result_ty;
         let mut div = 1;
         if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
-            // `int - int`
-            result_ty = Type::new_int().wrap();
+            // `integer - integer`
+            (lhs, rhs) = usual_arith_conv(lhs, rhs);
+            result_ty = Rc::clone(&lhs.ty);
         } else if lhs.ty.borrow().is_ptr() && rhs.ty.borrow().is_integer() {
-            // `ptr - int`
+            // `ptr - integer`
             let size = lhs.ty.borrow().get_base_ty().borrow().size;
             if size.is_none() {
                 return Err(error_message("invalid operands", ctx, loc));
@@ -228,23 +257,21 @@ impl Expr {
             rhs = Expr::new_binary(
                 BinaryOp::MUL,
                 rhs,
-                Expr::new_num(size.unwrap() as i64, loc),
+                Expr::new_long(size.unwrap() as i64, loc),
                 ctx,
                 loc,
             )?;
             result_ty = Rc::clone(&lhs.ty);
-        } else if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_ptr() {
-            // `int - ptr`
-            return Err(error_message("invalid operands", ctx, loc));
-        } else {
+        } else if lhs.ty.borrow().is_ptr() && rhs.ty.borrow().is_ptr() {
             // `ptr - ptr`
-            // todo: type check
             let size = lhs.ty.borrow().get_base_ty().borrow().size;
             if size.is_none() {
                 return Err(error_message("invalid operands", ctx, loc));
             }
             div = size.unwrap() as i64;
             result_ty = Type::new_int().wrap();
+        } else {
+            return Err(error_message("invalid operands", ctx, loc));
         }
         let mut expr = Box::new(Expr {
             kind: ExprKind::Binary {
@@ -261,12 +288,13 @@ impl Expr {
         Ok(expr)
     }
 
-    fn new_unary(op: UnaryOp, expr: Box<Expr>, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
+    fn new_unary(op: UnaryOp, mut expr: Box<Expr>, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
         let result_ty;
         match op {
             UnaryOp::NEG => {
                 if expr.ty.borrow().is_integer() {
-                    result_ty = Rc::clone(&expr.ty);
+                    result_ty = get_common_type(&Type::new_int().wrap(), &expr.ty);
+                    expr = Expr::new_cast(expr, &result_ty, loc);
                 } else {
                     return Err(error_message("invalid operand", ctx, loc));
                 }
@@ -283,7 +311,11 @@ impl Expr {
                 }
             }
             UnaryOp::ADDR => {
-                result_ty = Type::new_ptr(&expr.ty).wrap();
+                if expr.ty.borrow().is_array() {
+                    result_ty = Type::new_ptr(&expr.ty.borrow().get_base_ty()).wrap();
+                } else {
+                    result_ty = Type::new_ptr(&expr.ty).wrap();
+                }
             }
         }
         Ok(Box::new(Expr {
@@ -291,6 +323,16 @@ impl Expr {
             ty: result_ty,
             loc,
         }))
+    }
+
+    fn new_comma(lhs: Box<Expr>, rhs: Box<Expr>, loc: usize) -> Box<Expr> {
+        let ty = Rc::clone(&rhs.ty);
+        let expr = Expr {
+            kind: ExprKind::Comma { lhs, rhs },
+            ty,
+            loc,
+        };
+        Box::new(expr)
     }
 
     fn new_member(expr: Box<Expr>, name: &str, ctx: &Context, loc: usize) -> Result<Box<Expr>> {
@@ -323,6 +365,14 @@ impl Expr {
     }
 
     fn new_num(val: i64, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::Num(val),
+            ty: Type::new_int().wrap(),
+            loc,
+        })
+    }
+
+    fn new_long(val: i64, loc: usize) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::Num(val),
             ty: Type::new_long().wrap(),
@@ -909,7 +959,7 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         let loc = tok.loc;
         tokenize::consume_punct(tok, ",");
         let rhs = expr(tok, ctx)?;
-        return Ok(Expr::new_binary(BinaryOp::COMMA, lhs, rhs, ctx, loc)?);
+        return Ok(Expr::new_comma(lhs, rhs, loc));
     }
     Ok(lhs)
 }

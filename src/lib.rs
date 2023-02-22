@@ -219,8 +219,12 @@ impl Type {
         matches!(self.kind, TypeKind::Long)
     }
 
+    pub fn is_array(&self) -> bool {
+        matches!(self.kind, TypeKind::Array(..))
+    }
+
     pub fn is_ptr(&self) -> bool {
-        matches!(self.kind, TypeKind::Ptr(_) | TypeKind::Array(_, _))
+        matches!(self.kind, TypeKind::Ptr(_) | TypeKind::Array(..))
     }
 
     pub fn is_func(&self) -> bool {
