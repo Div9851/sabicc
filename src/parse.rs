@@ -443,34 +443,31 @@ fn global_variable(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Cont
 }
 
 pub fn func(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<Box<Func>> {
-    ctx.stack_size = 0;
-    ctx.enter_scope();
     let loc = tok.loc;
     let decl = declarator(tok, base_ty, ctx)?;
     let ty = decl.ty.borrow();
-    ctx.new_gvar(&decl);
-    if let TypeKind::Func {
-        params: param_decls,
-        return_ty,
-    } = &ty.kind
-    {
-        let mut params = Vec::new();
-        for param_decl in param_decls {
-            params.push(ctx.new_lvar(&param_decl));
-        }
-        let body = compound_stmt(tok, ctx)?;
-        ctx.leave_scope();
-        ctx.stack_size = align_to(ctx.stack_size, 16);
-        Ok(Box::new(Func {
-            name: decl.name,
-            return_ty: Rc::clone(&return_ty),
-            params: params.clone(),
-            body,
-            stack_size: ctx.stack_size,
-        }))
-    } else {
+    if !ty.is_func() {
         return Err(error_message("expected a function", ctx, loc));
     }
+    ctx.new_gvar(&decl);
+    ctx.return_ty = Rc::clone(&ty.get_return_ty());
+    ctx.stack_size = 0;
+    ctx.enter_scope();
+    let param_decls = ty.get_params();
+    let mut params = Vec::new();
+    for param_decl in param_decls {
+        params.push(ctx.new_lvar(&param_decl));
+    }
+    let body = compound_stmt(tok, ctx)?;
+    ctx.leave_scope();
+    ctx.stack_size = align_to(ctx.stack_size, 16);
+    Ok(Box::new(Func {
+        name: decl.name,
+        return_ty: Rc::clone(&ctx.return_ty),
+        params,
+        body,
+        stack_size: ctx.stack_size,
+    }))
 }
 
 // Lookahead tokens and returns true if a given token is a start
@@ -847,12 +844,13 @@ fn null_stmt(tok: &mut &Token, ctx: &Context) -> Result<Box<Stmt>> {
 fn return_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
     tokenize::expect_punct(tok, "return", ctx)?;
-    let stmt = Stmt {
-        kind: StmtKind::ReturnStmt(expr(tok, ctx)?),
-        loc,
-    };
+    let mut expr = expr(tok, ctx)?;
     tokenize::expect_punct(tok, ";", ctx)?;
-    Ok(Box::new(stmt))
+    expr = Expr::new_cast(expr, &ctx.return_ty, loc);
+    Ok(Box::new(Stmt {
+        kind: StmtKind::ReturnStmt(expr),
+        loc,
+    }))
 }
 
 // compound-stmt = (typedef | declaration | stmt)* "}"

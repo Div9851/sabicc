@@ -253,6 +253,13 @@ impl Type {
         }
     }
 
+    pub fn get_params(&self) -> &[Decl] {
+        match &self.kind {
+            TypeKind::Func { params, .. } => params,
+            _ => panic!("try to get parameters of a non function type"),
+        }
+    }
+
     pub fn wrap(self) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(self))
     }
@@ -267,8 +274,9 @@ pub struct Context {
     pub scopes: Vec<HashMap<String, Obj>>,
     pub tag_scopes: Vec<HashMap<String, Rc<RefCell<Type>>>>,
     pub init_data: HashMap<String, Vec<u8>>,
-    pub id: usize,
+    pub return_ty: Rc<RefCell<Type>>,
     pub stack_size: usize,
+    pub id: usize,
 }
 
 impl Context {
@@ -297,8 +305,9 @@ impl Context {
             scopes: Vec::new(),
             tag_scopes: Vec::new(),
             init_data: HashMap::new(),
-            id: 0,
+            return_ty: Type::new_int().wrap(),
             stack_size: 0,
+            id: 0,
         }
     }
 
