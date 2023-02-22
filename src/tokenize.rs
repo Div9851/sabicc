@@ -238,13 +238,9 @@ fn read_escaped_char(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<u8>
 
 fn read_string_literal(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<Vec<u8>> {
     let mut s = Vec::new();
-    while bytes[*pos] != b'\0' {
-        if bytes[*pos] == b'"' {
-            *pos += 1;
-            return Ok(s);
-        }
-        if bytes[*pos] == b'\n' {
-            break;
+    while bytes[*pos] != b'\"' {
+        if bytes[*pos] == b'\0' || bytes[*pos] == b'\n' {
+            return Err(error_message("unclosed string literal", ctx, *pos));
         }
         if bytes[*pos] == b'\\' {
             *pos += 1;
@@ -255,7 +251,27 @@ fn read_string_literal(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<V
         s.push(bytes[*pos]);
         *pos += 1;
     }
-    Err(error_message("unclosed string literal", ctx, *pos))
+    *pos += 1;
+    Ok(s)
+}
+
+fn read_char_literal(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<i8> {
+    if bytes[*pos] == b'\0' || bytes[*pos] == b'\n' {
+        return Err(error_message("unclosed character literal", ctx, *pos));
+    }
+    let c;
+    if bytes[*pos] == b'\\' {
+        *pos += 1;
+        c = read_escaped_char(bytes, pos, ctx)?;
+    } else {
+        c = bytes[*pos];
+        *pos += 1;
+    }
+    if bytes[*pos] != b'\'' {
+        return Err(error_message("unclosed character literal", ctx, *pos));
+    }
+    *pos += 1;
+    Ok(c as i8)
 }
 
 pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
@@ -313,6 +329,17 @@ pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
             let loc = pos;
             let bytes = read_string_literal(bytes, &mut pos, ctx)?;
             let tok = Token::new(TokenKind::Str(bytes), loc, "");
+            cur.next = Some(tok);
+            cur = cur.next.as_mut().unwrap();
+            continue;
+        }
+
+        // Character literal
+        if bytes[pos] == b'\'' {
+            pos += 1;
+            let loc = pos;
+            let c = read_char_literal(bytes, &mut pos, ctx)?;
+            let tok = Token::new(TokenKind::Num(c as i64), loc, "");
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
             continue;
