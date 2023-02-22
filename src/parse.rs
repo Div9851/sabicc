@@ -329,13 +329,18 @@ impl Expr {
         })
     }
 
-    fn new_funcall(name: &str, args: Vec<Box<Expr>>, loc: usize) -> Box<Expr> {
+    fn new_funcall(
+        name: &str,
+        args: Vec<Box<Expr>>,
+        return_ty: &Rc<RefCell<Type>>,
+        loc: usize,
+    ) -> Box<Expr> {
         Box::new(Expr {
             kind: ExprKind::FunCall {
                 name: name.to_owned(),
                 args,
             },
-            ty: Type::new_long().wrap(),
+            ty: Rc::clone(&return_ty),
             loc,
         })
     }
@@ -1111,8 +1116,16 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 
     if let Some(ident) = tokenize::consume_ident(tok) {
+        let obj = ctx.find_var(&ident);
+        if obj.is_none() {
+            return Err(error_message("unknown identifier", ctx, loc));
+        }
+        let obj = obj.unwrap();
         // Function call
         if tokenize::consume_punct(tok, "(") {
+            if !obj.is_global() || !obj.ty.borrow().is_func() {
+                return Err(error_message("not a function", ctx, loc));
+            }
             let mut args = Vec::new();
             while !tokenize::consume_punct(tok, ")") {
                 if args.len() > 0 {
@@ -1120,14 +1133,15 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
                 }
                 args.push(assign(tok, ctx)?);
             }
-            return Ok(Expr::new_funcall(ident, args, loc));
+            let ty = obj.ty.borrow();
+            let return_ty = ty.get_return_ty();
+            return Ok(Expr::new_funcall(ident, args, return_ty, loc));
         }
         // Variable
-        let obj = ctx.find_var(&ident);
-        if obj.is_none() || obj.as_ref().unwrap().is_typedef() {
-            return Err(error_message("undefined variable", ctx, loc));
+        if obj.is_typedef() {
+            return Err(error_message("not a variable", ctx, loc));
         }
-        return Ok(Expr::new_var(obj.unwrap(), loc));
+        return Ok(Expr::new_var(obj, loc));
     }
 
     if let Some(bytes) = tokenize::consume_str(tok) {

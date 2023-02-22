@@ -21,6 +21,10 @@ pub struct Obj {
 }
 
 impl Obj {
+    fn is_global(&self) -> bool {
+        matches!(self.kind, ObjKind::Global(_))
+    }
+
     fn is_typedef(&self) -> bool {
         matches!(self.kind, ObjKind::TypeDef)
     }
@@ -235,6 +239,13 @@ impl Type {
         match &self.kind {
             TypeKind::Ptr(base_ty) | TypeKind::Array(base_ty, _) => base_ty,
             _ => panic!("try to get base_ty of a non pointer type"),
+        }
+    }
+
+    pub fn get_return_ty(&self) -> &Rc<RefCell<Type>> {
+        match &self.kind {
+            TypeKind::Func { return_ty, .. } => return_ty,
+            _ => panic!("try to get return_ty of a non function type"),
         }
     }
 
