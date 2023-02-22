@@ -109,6 +109,7 @@ pub enum ExprKind {
         name: String,
         args: Vec<Box<Expr>>,
     },
+    Cast(Box<Expr>),
 }
 
 pub struct Expr {
@@ -341,6 +342,14 @@ impl Expr {
                 args,
             },
             ty: Rc::clone(&return_ty),
+            loc,
+        })
+    }
+
+    fn new_cast(expr: Box<Expr>, convert_to: &Rc<RefCell<Type>>, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::Cast(expr),
+            ty: Rc::clone(convert_to),
             loc,
         })
     }
@@ -978,35 +987,49 @@ fn add(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 }
 
-// mul = unary ("*" unary | "/" unary)*
+// mul = cast ("*" cast | "/" cast)*
 fn mul(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
-    let mut expr = unary(tok, ctx)?;
+    let mut expr = cast(tok, ctx)?;
     loop {
         let loc = tok.loc;
         if tokenize::consume_punct(tok, "*") {
-            expr = Expr::new_binary(BinaryOp::MUL, expr, unary(tok, ctx)?, ctx, loc)?;
+            expr = Expr::new_binary(BinaryOp::MUL, expr, cast(tok, ctx)?, ctx, loc)?;
             continue;
         }
         if tokenize::consume_punct(tok, "/") {
-            expr = Expr::new_binary(BinaryOp::DIV, expr, unary(tok, ctx)?, ctx, loc)?;
+            expr = Expr::new_binary(BinaryOp::DIV, expr, cast(tok, ctx)?, ctx, loc)?;
             continue;
         }
         break Ok(expr);
     }
 }
 
-// unary = ("+" | "-" | "*" | "&") unary
+// cast = "(" type-name ")" cast | unary
+fn cast(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
+    let loc = tok.loc;
+    let mut cur = *tok;
+    if tokenize::consume_punct(&mut cur, "(") && is_typename(&mut cur, ctx) {
+        *tok = cur;
+        let ty = typename(tok, ctx)?;
+        tokenize::expect_punct(tok, ")", ctx)?;
+        Ok(Expr::new_cast(cast(tok, ctx)?, &ty, loc))
+    } else {
+        unary(tok, ctx)
+    }
+}
+
+// unary = ("+" | "-" | "*" | "&") cast
 //       | postfix
 fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let loc = tok.loc;
     if tokenize::consume_punct(tok, "+") {
-        unary(tok, ctx)
+        cast(tok, ctx)
     } else if tokenize::consume_punct(tok, "-") {
-        Ok(Expr::new_unary(UnaryOp::NEG, unary(tok, ctx)?, ctx, loc)?)
+        Ok(Expr::new_unary(UnaryOp::NEG, cast(tok, ctx)?, ctx, loc)?)
     } else if tokenize::consume_punct(tok, "*") {
-        Ok(Expr::new_unary(UnaryOp::DEREF, unary(tok, ctx)?, ctx, loc)?)
+        Ok(Expr::new_unary(UnaryOp::DEREF, cast(tok, ctx)?, ctx, loc)?)
     } else if tokenize::consume_punct(tok, "&") {
-        Ok(Expr::new_unary(UnaryOp::ADDR, unary(tok, ctx)?, ctx, loc)?)
+        Ok(Expr::new_unary(UnaryOp::ADDR, cast(tok, ctx)?, ctx, loc)?)
     } else {
         postfix(tok, ctx)
     }

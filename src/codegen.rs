@@ -385,6 +385,38 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             // todo: RSP must be align to 16
             writeln!(&mut output, "  call {}", name).unwrap();
         }
+        ExprKind::Cast(operand) => {
+            let i32i8 = "movsbl eax, al";
+            let i32i16 = "movswl eax, ax";
+            let i32i64 = "movsxd rax, eax";
+
+            writeln!(&mut output, "{}", gen_expr(operand, ctx)?).unwrap();
+            let from_ty = &operand.ty.borrow().kind;
+            let to_ty = &expr.ty.borrow().kind;
+            match from_ty {
+                TypeKind::Char => match to_ty {
+                    TypeKind::Long => writeln!(&mut output, "{}", i32i64).unwrap(),
+                    _ => {}
+                },
+                TypeKind::Short => match to_ty {
+                    TypeKind::Char => writeln!(&mut output, "{}", i32i8).unwrap(),
+                    TypeKind::Long => writeln!(&mut output, "{}", i32i64).unwrap(),
+                    _ => {}
+                },
+                TypeKind::Int => match to_ty {
+                    TypeKind::Char => writeln!(&mut output, "{}", i32i8).unwrap(),
+                    TypeKind::Short => writeln!(&mut output, "{}", i32i16).unwrap(),
+                    TypeKind::Long => writeln!(&mut output, "{}", i32i64).unwrap(),
+                    _ => {}
+                },
+                TypeKind::Long => match to_ty {
+                    TypeKind::Char => writeln!(&mut output, "{}", i32i8).unwrap(),
+                    TypeKind::Short => writeln!(&mut output, "{}", i32i16).unwrap(),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
     };
     Ok(output)
 }
