@@ -150,6 +150,7 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "long"
         || tok.text == "struct"
         || tok.text == "union"
+        || tok.text == "enum"
         || tok.text == "void"
         || tok.text == "typedef"
         || tok.text == "_Bool"

@@ -12,6 +12,7 @@ pub enum ObjKind {
     Local(usize),
     Global(String),
     TypeDef,
+    Enum(i64),
 }
 
 #[derive(Clone)]
@@ -67,6 +68,7 @@ pub enum TypeKind {
     },
     Struct(HashMap<String, Member>),
     Union(HashMap<String, Member>),
+    Enum,
 }
 
 #[derive(Debug)]
@@ -213,6 +215,14 @@ impl Type {
         }
     }
 
+    fn new_enum() -> Type {
+        Type {
+            kind: TypeKind::Enum,
+            size: Some(4),
+            align: 4,
+        }
+    }
+
     pub fn is_void(&self) -> bool {
         matches!(self.kind, TypeKind::Void)
     }
@@ -224,7 +234,12 @@ impl Type {
     pub fn is_integer(&self) -> bool {
         matches!(
             self.kind,
-            TypeKind::Bool | TypeKind::Char | TypeKind::Short | TypeKind::Int | TypeKind::Long
+            TypeKind::Bool
+                | TypeKind::Char
+                | TypeKind::Short
+                | TypeKind::Int
+                | TypeKind::Long
+                | TypeKind::Enum
         )
     }
 
@@ -250,6 +265,10 @@ impl Type {
 
     pub fn is_union(&self) -> bool {
         matches!(self.kind, TypeKind::Union(_))
+    }
+
+    pub fn is_enum(&self) -> bool {
+        matches!(self.kind, TypeKind::Enum)
     }
 
     pub fn get_base_ty(&self) -> &Rc<RefCell<Type>> {
@@ -370,6 +389,18 @@ impl Context {
             .last_mut()
             .unwrap()
             .insert(decl.name.clone(), obj.clone());
+        obj
+    }
+
+    fn new_enum_const(&mut self, name: &str, val: i64) -> Obj {
+        let obj = Obj {
+            kind: ObjKind::Enum(val),
+            ty: Type::new_enum().wrap(),
+        };
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .insert(name.to_owned(), obj.clone());
         obj
     }
 

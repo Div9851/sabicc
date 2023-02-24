@@ -4,7 +4,9 @@ use std::mem;
 use std::rc::Rc;
 
 use crate::tokenize::{self, Token};
-use crate::{align_to, error_message, Context, Decl, DeclSpec, Obj, Type, TypeKind, VarAttr};
+use crate::{
+    align_to, error_message, Context, Decl, DeclSpec, Obj, ObjKind, Type, TypeKind, VarAttr,
+};
 
 pub struct Program {
     pub funcs: Vec<Box<Func>>,
@@ -487,7 +489,8 @@ fn is_func_def(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
 
 // declspec = ("void" | "char" | "short" | "int" | "long" |
 //             | "typedef"
-//             | struct-decl | union-decl | typedef-name)+
+//             | struct-decl | union-decl | typedef-name)
+//             | enum-specifier)+
 // The order of typenames in a type-specifier doesn't matter. For
 // example, `int long static` means the same as `static long int`.
 // That can also be written as `static long` because you can omit
@@ -536,6 +539,7 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
         // Handle user-defined types.
         if tokenize::equal_punct(tok, "struct")
             || tokenize::equal_punct(tok, "union")
+            || tokenize::equal_punct(tok, "enum")
             || tokenize::equal_ident(tok)
         {
             if counter > 0 {
@@ -544,8 +548,9 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
             if tokenize::consume_punct(tok, "struct") {
                 ty = struct_union_decl(tok, ctx, true)?;
             } else if tokenize::consume_punct(tok, "union") {
-                tokenize::consume_punct(tok, "union");
                 ty = struct_union_decl(tok, ctx, false)?;
+            } else if tokenize::consume_punct(tok, "enum") {
+                ty = enum_specifier(tok, ctx)?;
             } else {
                 let ident = tokenize::expect_ident(tok, ctx)?;
                 ty = ctx.find_var(ident).unwrap().ty;
@@ -731,6 +736,7 @@ fn is_typename(tok: &Token, ctx: &Context) -> bool {
         || tokenize::equal_punct(tok, "long")
         || tokenize::equal_punct(tok, "struct")
         || tokenize::equal_punct(tok, "union")
+        || tokenize::equal_punct(tok, "enum")
         || tokenize::equal_punct(tok, "typedef")
 }
 
@@ -798,6 +804,44 @@ fn struct_union_decl(
     } else {
         Ok(struct_ty.wrap())
     }
+}
+
+fn enum_specifier(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
+    let loc = tok.loc;
+    let enum_ty = Type::new_enum().wrap();
+    // Read a tag.
+    let tag = tokenize::consume_ident(tok);
+    if tag.is_some() && !tokenize::equal_punct(tok, "{") {
+        let ty = ctx.find_tag(tag.unwrap());
+        if ty.is_none() {
+            return Err(error_message("unknown enum type", ctx, loc));
+        }
+        let ty = ty.unwrap();
+        if !ty.borrow().is_enum() {
+            return Err(error_message("not an enum tag", ctx, loc));
+        }
+        return Ok(ty);
+    }
+    tokenize::consume_punct(tok, "{");
+    // Read an enum-list
+    let mut first = true;
+    let mut val = 0;
+    while !tokenize::consume_punct(tok, "}") {
+        if !first {
+            tokenize::expect_punct(tok, ",", ctx)?;
+        }
+        first = false;
+        let name = tokenize::expect_ident(tok, ctx)?;
+        if tokenize::consume_punct(tok, "=") {
+            val = tokenize::expect_number(tok, ctx)?;
+        }
+        ctx.new_enum_const(name, val);
+        val += 1;
+    }
+    if let Some(tag) = tag {
+        ctx.new_tag(tag, &enum_ty);
+    }
+    Ok(enum_ty)
 }
 
 fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<()> {
@@ -1221,6 +1265,10 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
                 args.push(arg);
             }
             return Ok(Expr::new_funcall(ident, args, return_ty, loc));
+        }
+        // Enum
+        if let ObjKind::Enum(val) = obj.kind {
+            return Ok(Expr::new_num(val, loc));
         }
         // Variable
         if obj.is_typedef() {
