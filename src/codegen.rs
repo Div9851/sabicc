@@ -252,7 +252,9 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             inc,
             body,
         } => {
-            write!(&mut output, "{}", gen_stmt(init, ctx)?).unwrap();
+            for init_stmt in init {
+                write!(&mut output, "{}", gen_stmt(init_stmt, ctx)?).unwrap();
+            }
             writeln!(&mut output, ".L.begin.{}:", ctx.id).unwrap();
             if let Some(cond) = cond {
                 write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();

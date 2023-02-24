@@ -41,7 +41,7 @@ pub enum StmtKind {
         els: Option<Box<Stmt>>,
     },
     ForStmt {
-        init: Box<Stmt>,
+        init: Vec<Box<Stmt>>,
         cond: Option<Box<Expr>>,
         inc: Option<Box<Expr>>,
         body: Box<Stmt>,
@@ -989,7 +989,14 @@ fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let loc = tok.loc;
     tokenize::expect_punct(tok, "for", ctx)?;
     tokenize::expect_punct(tok, "(", ctx)?;
-    let init = stmt(tok, ctx)?;
+    ctx.enter_scope();
+    let init;
+    if is_typename(tok, ctx) {
+        let spec = declspec(tok, ctx, false)?;
+        init = declaration(tok, ctx, &spec.ty)?;
+    } else {
+        init = vec![stmt(tok, ctx)?];
+    }
     let mut cond = None;
     if !tokenize::equal_punct(tok, ";") {
         cond = Some(expr(tok, ctx)?);
@@ -1001,6 +1008,7 @@ fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     }
     tokenize::expect_punct(tok, ")", ctx)?;
     let body = stmt(tok, ctx)?;
+    ctx.leave_scope();
     let stmt = Stmt {
         kind: StmtKind::ForStmt {
             init,
