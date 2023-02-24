@@ -177,7 +177,11 @@ fn cmp_zero(ty: &Rc<RefCell<Type>>) -> String {
 
 fn emit_text(func: &Func, ctx: &mut Context) -> Result<String> {
     let mut output = String::new();
-    writeln!(&mut output, ".globl {}", func.name).unwrap();
+    if func.is_static {
+        writeln!(&mut output, ".local {}", func.name).unwrap();
+    } else {
+        writeln!(&mut output, ".globl {}", func.name).unwrap();
+    }
     writeln!(&mut output, ".text").unwrap();
     writeln!(&mut output, "{}:", func.name).unwrap();
     // Prologue

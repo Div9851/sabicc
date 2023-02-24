@@ -45,6 +45,7 @@ pub struct Decl {
 
 pub struct VarAttr {
     pub is_typedef: bool,
+    pub is_static: bool,
 }
 
 pub struct DeclSpec {

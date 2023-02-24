@@ -27,6 +27,7 @@ pub struct Func {
     pub params: Vec<Obj>,
     pub body: Box<Stmt>,
     pub stack_size: usize,
+    pub is_static: bool,
 }
 
 pub enum StmtKind {
@@ -419,7 +420,7 @@ pub fn program(text: String, filename: &str) -> Result<Program> {
         if is_func_def(&mut tok, &mut program.ctx)? {
             program
                 .funcs
-                .push(func(&mut tok, &spec.ty, &mut program.ctx)?);
+                .push(func(&mut tok, &spec.ty, &spec.attr, &mut program.ctx)?);
             continue;
         }
         // Global variable or function declaration
@@ -445,7 +446,12 @@ fn global_variable(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Cont
     Ok(())
 }
 
-pub fn func(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) -> Result<Box<Func>> {
+pub fn func(
+    tok: &mut &Token,
+    base_ty: &Rc<RefCell<Type>>,
+    attr: &VarAttr,
+    ctx: &mut Context,
+) -> Result<Box<Func>> {
     let loc = tok.loc;
     let decl = declarator(tok, base_ty, ctx)?;
     let ty = decl.ty.borrow();
@@ -470,6 +476,7 @@ pub fn func(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Context) ->
         params,
         body,
         stack_size: ctx.stack_size,
+        is_static: attr.is_static,
     }))
 }
 
@@ -488,7 +495,7 @@ fn is_func_def(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
 }
 
 // declspec = ("void" | "char" | "short" | "int" | "long" |
-//             | "typedef"
+//             | "typedef" | "static"
 //             | struct-decl | union-decl | typedef-name)
 //             | enum-specifier)+
 // The order of typenames in a type-specifier doesn't matter. For
@@ -521,19 +528,35 @@ fn declspec(tok: &mut &Token, ctx: &mut Context, accept_attr: bool) -> Result<De
 
     let mut ty = Type::new_int().wrap();
     let mut counter = 0;
-    let mut attr = VarAttr { is_typedef: false };
+    let mut attr = VarAttr {
+        is_typedef: false,
+        is_static: false,
+    };
     while is_typename(tok, ctx) {
-        // Handle "typedef" keyword
-        if tokenize::equal_punct(tok, "typedef") {
+        let loc = tok.loc;
+        // Handle storage class specifiers.
+        if tokenize::equal_punct(tok, "typedef") || tokenize::equal_punct(tok, "static") {
             if !accept_attr {
                 return Err(error_message(
                     "storage class specifier is not allowed in this context",
                     ctx,
-                    tok.loc,
+                    loc,
                 ));
             }
-            tokenize::consume_punct(tok, "typedef");
-            attr.is_typedef = true;
+            if tokenize::equal_punct(tok, "typedef") {
+                tokenize::consume_punct(tok, "typedef");
+                attr.is_typedef = true;
+            } else {
+                tokenize::consume_punct(tok, "static");
+                attr.is_static = true;
+            }
+            if attr.is_typedef && attr.is_static {
+                return Err(error_message(
+                    "typedef and static may not be used together",
+                    ctx,
+                    loc,
+                ));
+            }
             continue;
         }
         // Handle user-defined types.
@@ -738,6 +761,7 @@ fn is_typename(tok: &Token, ctx: &Context) -> bool {
         || tokenize::equal_punct(tok, "union")
         || tokenize::equal_punct(tok, "enum")
         || tokenize::equal_punct(tok, "typedef")
+        || tokenize::equal_punct(tok, "static")
 }
 
 // struct-members = (declspec declarator ("," declarator)* ";")* "}"
