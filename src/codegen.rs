@@ -371,6 +371,12 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                 UnaryOp::ADDR => {
                     write!(&mut output, "{}", gen_addr(&operand, ctx)?).unwrap();
                 }
+                UnaryOp::NOT => {
+                    write!(&mut output, "{}", gen_expr(&operand, ctx)?).unwrap();
+                    writeln!(&mut output, "cmp rax, 0").unwrap();
+                    writeln!(&mut output, "sete al").unwrap();
+                    writeln!(&mut output, "movzx rax, al").unwrap();
+                }
             };
         }
         ExprKind::Comma { lhs, rhs } => {
