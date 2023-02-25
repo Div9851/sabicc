@@ -166,6 +166,10 @@ fn convert_keyword(tok: &mut Token) {
     }
 }
 
+fn is_bindigit(ch: u8) -> bool {
+    b'0' <= ch && ch <= b'1'
+}
+
 fn is_octdigit(ch: u8) -> bool {
     b'0' <= ch && ch <= b'7'
 }
@@ -282,6 +286,43 @@ fn read_char_literal(bytes: &[u8], pos: &mut usize, ctx: &Context) -> Result<i8>
     Ok(c as i8)
 }
 
+fn read_int_literal(bytes: &[u8], text: &str, pos: &mut usize, ctx: &Context) -> Result<i64> {
+    let val;
+    let is_bin = bytes[*pos..].starts_with(b"0b") || bytes[*pos..].starts_with(b"0B");
+    let is_hex = bytes[*pos..].starts_with(b"0x") || bytes[*pos..].starts_with(b"0X");
+    if is_hex && is_hexdigit(bytes[*pos + 2]) {
+        *pos += 2;
+        let start = *pos;
+        while is_hexdigit(bytes[*pos]) {
+            *pos += 1;
+        }
+        val = i64::from_str_radix(&text[start..*pos], 16).unwrap();
+    } else if is_bin && is_bindigit(bytes[*pos + 2]) {
+        *pos += 2;
+        let start = *pos;
+        while is_bindigit(bytes[*pos]) {
+            *pos += 1;
+        }
+        val = i64::from_str_radix(&text[start..*pos], 2).unwrap();
+    } else if bytes[*pos] == b'0' {
+        let start = *pos;
+        while is_octdigit(bytes[*pos]) {
+            *pos += 1;
+        }
+        val = i64::from_str_radix(&text[start..*pos], 8).unwrap();
+    } else {
+        let start = *pos;
+        while bytes[*pos].is_ascii_digit() {
+            *pos += 1;
+        }
+        val = i64::from_str_radix(&text[start..*pos], 10).unwrap();
+    }
+    if bytes[*pos].is_ascii_alphanumeric() {
+        return Err(error_message("invalid digit", ctx, *pos));
+    }
+    Ok(val)
+}
+
 pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
     let mut head = Token::new(TokenKind::Punct, 0, "");
     let mut cur = head.as_mut();
@@ -321,10 +362,7 @@ pub fn tokenize(text: &str, ctx: &Context) -> Result<Box<Token>> {
         // Numeric literal
         if bytes[pos].is_ascii_digit() {
             let loc = pos;
-            while pos < bytes.len() && bytes[pos].is_ascii_digit() {
-                pos += 1;
-            }
-            let val = i64::from_str_radix(&text[loc..pos], 10).unwrap();
+            let val = read_int_literal(bytes, text, &mut pos, ctx)?;
             let tok = Token::new(TokenKind::Num(val), loc, &text[loc..pos]);
             cur.next = Some(tok);
             cur = cur.next.as_mut().unwrap();
