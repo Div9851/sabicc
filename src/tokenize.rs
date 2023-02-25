@@ -128,6 +128,10 @@ fn read_punct(bytes: &[u8]) -> usize {
         || bytes.starts_with(b"<=")
         || bytes.starts_with(b">=")
         || bytes.starts_with(b"->")
+        || bytes.starts_with(b"+=")
+        || bytes.starts_with(b"-=")
+        || bytes.starts_with(b"*=")
+        || bytes.starts_with(b"/=")
     {
         2
     } else if bytes[0].is_ascii_punctuation() {

@@ -82,6 +82,10 @@ fn gen_addr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             writeln!(&mut output, "  add rax, {}", offset).unwrap();
             Ok(output)
         }
+        ExprKind::Cast(expr) => {
+            write!(&mut output, "{}", gen_addr(expr, ctx)?).unwrap();
+            Ok(output)
+        }
         _ => Err(error_message("not an lvalue", ctx, expr.loc)),
     }
 }

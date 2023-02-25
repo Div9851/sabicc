@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ObjKind {
     Local(usize),
     Global(String),
@@ -15,7 +15,7 @@ pub enum ObjKind {
     Enum(i64),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Obj {
     pub kind: ObjKind,
     pub ty: Rc<RefCell<Type>>,

@@ -30,6 +30,7 @@ pub struct Func {
     pub is_static: bool,
 }
 
+#[derive(Debug)]
 pub enum StmtKind {
     NullStmt,
     ReturnStmt(Box<Expr>),
@@ -52,6 +53,7 @@ pub enum StmtKind {
     },
 }
 
+#[derive(Debug)]
 pub struct Stmt {
     pub kind: StmtKind,
     pub loc: usize,
@@ -67,7 +69,7 @@ impl Stmt {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum BinaryOp {
     ADD, // +
     SUB, // -
@@ -79,13 +81,14 @@ pub enum BinaryOp {
     LE,  // <=
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum UnaryOp {
     NEG,   // -
     DEREF, // *
     ADDR,  // &
 }
 
+#[derive(Debug)]
 pub enum ExprKind {
     StmtExpr(Vec<Box<Stmt>>),
     Assign {
@@ -118,6 +121,7 @@ pub enum ExprKind {
     Cast(Box<Expr>),
 }
 
+#[derive(Debug)]
 pub struct Expr {
     pub kind: ExprKind,
     pub ty: Rc<RefCell<Type>>,
@@ -1047,13 +1051,57 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     Ok(lhs)
 }
 
-// assign = equality ("=" assign)?
+// Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
+// where tmp is a fresh pointer variable.
+fn to_assign(binary: Box<Expr>, ctx: &mut Context) -> Result<Box<Expr>> {
+    let loc = binary.loc;
+    if let ExprKind::Binary { op, lhs, rhs } = binary.kind {
+        let var = ctx.new_lvar(&Decl {
+            name: "".to_owned(),
+            ty: Type::new_ptr(&lhs.ty).wrap(),
+        });
+        let expr1 = Expr::new_assign(
+            Expr::new_var(var.clone(), loc),
+            Expr::new_unary(UnaryOp::ADDR, lhs, ctx, loc)?,
+            loc,
+        );
+        let expr2 = Expr::new_assign(
+            Expr::new_unary(UnaryOp::DEREF, Expr::new_var(var.clone(), loc), ctx, loc)?,
+            Expr::new_binary(
+                op,
+                Expr::new_unary(UnaryOp::DEREF, Expr::new_var(var.clone(), loc), ctx, loc)?,
+                rhs,
+                ctx,
+                loc,
+            )?,
+            loc,
+        );
+        return Ok(Expr::new_comma(expr1, expr2, loc));
+    }
+    unreachable!();
+}
+
+// assign = equality (assign-op assign)?
+// assign-op = "=" | "+=" | "-=" | "*=" | "/="
 fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let lhs = equality(tok, ctx)?;
     let loc = tok.loc;
     if tokenize::consume_punct(tok, "=") {
-        let rhs = assign(tok, ctx)?;
-        Ok(Expr::new_assign(lhs, rhs, loc))
+        Ok(Expr::new_assign(lhs, assign(tok, ctx)?, loc))
+    } else if tokenize::consume_punct(tok, "+=") {
+        to_assign(Expr::new_add(lhs, assign(tok, ctx)?, ctx, loc)?, ctx)
+    } else if tokenize::consume_punct(tok, "-=") {
+        to_assign(Expr::new_sub(lhs, assign(tok, ctx)?, ctx, loc)?, ctx)
+    } else if tokenize::consume_punct(tok, "*=") {
+        to_assign(
+            Expr::new_binary(BinaryOp::MUL, lhs, assign(tok, ctx)?, ctx, loc)?,
+            ctx,
+        )
+    } else if tokenize::consume_punct(tok, "/=") {
+        to_assign(
+            Expr::new_binary(BinaryOp::DIV, lhs, assign(tok, ctx)?, ctx, loc)?,
+            ctx,
+        )
     } else {
         Ok(lhs)
     }
