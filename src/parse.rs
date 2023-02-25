@@ -198,6 +198,26 @@ impl Expr {
         Ok(Expr::new_comma(expr1, expr2, loc))
     }
 
+    // Convert A++ to `(typeof A)((A += 1) - 1)`
+    fn new_inc_dec(
+        expr: Box<Expr>,
+        addend: i64,
+        ctx: &mut Context,
+        loc: usize,
+    ) -> Result<Box<Expr>> {
+        let ty = Rc::clone(&expr.ty);
+        Ok(Expr::new_cast(
+            Expr::new_add(
+                Expr::new_op_assign(BinaryOp::ADD, expr, Expr::new_num(addend, loc), ctx, loc)?,
+                Expr::new_num(-addend, loc),
+                ctx,
+                loc,
+            )?,
+            &ty,
+            loc,
+        ))
+    }
+
     fn new_binary(
         op: BinaryOp,
         lhs: Box<Expr>,
@@ -1229,7 +1249,7 @@ fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 }
 
-// postfix = primary ("[" expr "]" | "." ident | "->" ident)*
+// postfix = primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
 fn postfix(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut ret = primary(tok, ctx)?;
     loop {
@@ -1250,6 +1270,10 @@ fn postfix(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
             ret = Expr::new_unary(UnaryOp::DEREF, ret, ctx, loc)?;
             let name = tokenize::expect_ident(tok, ctx)?;
             ret = Expr::new_member(ret, name, ctx, loc)?;
+        } else if tokenize::consume_punct(tok, "++") {
+            ret = Expr::new_inc_dec(ret, 1, ctx, loc)?;
+        } else if tokenize::consume_punct(tok, "--") {
+            ret = Expr::new_inc_dec(ret, -1, ctx, loc)?;
         } else {
             break;
         }
