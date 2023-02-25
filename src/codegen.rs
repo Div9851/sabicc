@@ -237,17 +237,18 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             Ok(output)
         }
         StmtKind::IfStmt { cond, then, els } => {
+            let id = ctx.id;
+            ctx.id += 1;
             write!(&mut output, "{}", gen_expr(&cond, ctx)?).unwrap();
             writeln!(&mut output, "  cmp rax, 0").unwrap();
-            writeln!(&mut output, "  je .L.else.{}", ctx.id).unwrap();
+            writeln!(&mut output, "  je .L.else.{}", id).unwrap();
             write!(&mut output, "{}", gen_stmt(then, ctx)?).unwrap();
-            writeln!(&mut output, "  jmp .L.end.{}", ctx.id).unwrap();
-            writeln!(&mut output, ".L.else.{}:", ctx.id).unwrap();
+            writeln!(&mut output, "  jmp .L.end.{}", id).unwrap();
+            writeln!(&mut output, ".L.else.{}:", id).unwrap();
             if let Some(els) = els {
                 write!(&mut output, "{}", gen_stmt(els, ctx)?).unwrap();
             }
-            writeln!(&mut output, ".L.end.{}:", ctx.id).unwrap();
-            ctx.id += 1;
+            writeln!(&mut output, ".L.end.{}:", id).unwrap();
             Ok(output)
         }
         StmtKind::ForStmt {
@@ -259,30 +260,32 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             for init_stmt in init {
                 write!(&mut output, "{}", gen_stmt(init_stmt, ctx)?).unwrap();
             }
-            writeln!(&mut output, ".L.begin.{}:", ctx.id).unwrap();
+            let id = ctx.id;
+            ctx.id += 1;
+            writeln!(&mut output, ".L.begin.{}:", id).unwrap();
             if let Some(cond) = cond {
                 write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();
                 writeln!(&mut output, "  cmp rax, 0").unwrap();
-                writeln!(&mut output, "  je .L.end.{}", ctx.id).unwrap();
+                writeln!(&mut output, "  je .L.end.{}", id).unwrap();
             }
             write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
             if let Some(inc) = inc {
                 write!(&mut output, "{}", gen_expr(inc, ctx)?).unwrap();
             }
-            writeln!(&mut output, "  jmp .L.begin.{}", ctx.id).unwrap();
-            writeln!(&mut output, ".L.end.{}:", ctx.id).unwrap();
-            ctx.id += 1;
+            writeln!(&mut output, "  jmp .L.begin.{}", id).unwrap();
+            writeln!(&mut output, ".L.end.{}:", id).unwrap();
             Ok(output)
         }
         StmtKind::WhileStmt { cond, body } => {
-            writeln!(&mut output, ".L.begin.{}:", ctx.id).unwrap();
+            let id = ctx.id;
+            ctx.id += 1;
+            writeln!(&mut output, ".L.begin.{}:", id).unwrap();
             write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();
             writeln!(&mut output, "  cmp rax, 0").unwrap();
-            writeln!(&mut output, "  je .L.end.{}", ctx.id).unwrap();
+            writeln!(&mut output, "  je .L.end.{}", id).unwrap();
             write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
-            writeln!(&mut output, "  jmp .L.begin.{}", ctx.id).unwrap();
-            writeln!(&mut output, ".L.end.{}:", ctx.id).unwrap();
-            ctx.id += 1;
+            writeln!(&mut output, "  jmp .L.begin.{}", id).unwrap();
+            writeln!(&mut output, ".L.end.{}:", id).unwrap();
             Ok(output)
         }
     }
@@ -328,13 +331,16 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                 BinaryOp::MUL => {
                     writeln!(&mut output, "  imul {}, {}", ax, di).unwrap();
                 }
-                BinaryOp::DIV => {
+                BinaryOp::DIV | BinaryOp::MOD => {
                     if lhs.ty.borrow().is_long() {
                         writeln!(&mut output, "  cqo").unwrap();
                     } else {
                         writeln!(&mut output, "  cdq").unwrap();
                     }
                     writeln!(&mut output, "  idiv {}", di).unwrap();
+                    if matches!(op, BinaryOp::MOD) {
+                        writeln!(&mut output, "  mov rax, rdx").unwrap();
+                    }
                 }
                 BinaryOp::EQ => {
                     writeln!(&mut output, "  cmp {}, {}", ax, di).unwrap();

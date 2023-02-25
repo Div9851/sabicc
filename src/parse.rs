@@ -75,6 +75,7 @@ pub enum BinaryOp {
     SUB, // -
     MUL, // *
     DIV, // /
+    MOD, // %
     EQ,  // ==
     NE,  // !=
     LT,  // <
@@ -230,7 +231,7 @@ impl Expr {
         match op {
             BinaryOp::ADD => Expr::new_add(lhs, rhs, ctx, loc),
             BinaryOp::SUB => Expr::new_sub(lhs, rhs, ctx, loc),
-            BinaryOp::MUL | BinaryOp::DIV => {
+            BinaryOp::MUL | BinaryOp::DIV | BinaryOp::MOD => {
                 if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
                     let (lhs, rhs) = usual_arith_conv(lhs, rhs);
                     let ty = Rc::clone(&lhs.ty);
@@ -1126,6 +1127,8 @@ fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         Expr::new_op_assign(BinaryOp::MUL, lhs, assign(tok, ctx)?, ctx, loc)
     } else if tokenize::consume_punct(tok, "/=") {
         Expr::new_op_assign(BinaryOp::DIV, lhs, assign(tok, ctx)?, ctx, loc)
+    } else if tokenize::consume_punct(tok, "%=") {
+        Expr::new_op_assign(BinaryOp::MOD, lhs, assign(tok, ctx)?, ctx, loc)
     } else {
         Ok(lhs)
     }
@@ -1192,7 +1195,7 @@ fn add(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 }
 
-// mul = cast ("*" cast | "/" cast)*
+// mul = cast ("*" cast | "/" cast | "%" cast)*
 fn mul(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let mut expr = cast(tok, ctx)?;
     loop {
@@ -1203,6 +1206,10 @@ fn mul(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         }
         if tokenize::consume_punct(tok, "/") {
             expr = Expr::new_binary(BinaryOp::DIV, expr, cast(tok, ctx)?, ctx, loc)?;
+            continue;
+        }
+        if tokenize::consume_punct(tok, "%") {
+            expr = Expr::new_binary(BinaryOp::MOD, expr, cast(tok, ctx)?, ctx, loc)?;
             continue;
         }
         break Ok(expr);

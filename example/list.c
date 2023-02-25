@@ -1,3 +1,6 @@
+void *calloc(int n, int size);
+int printf(char *fmt, int val);
+
 typedef struct node_t Node;
 struct node_t {
     int val;
