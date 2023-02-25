@@ -166,6 +166,38 @@ impl Expr {
         })
     }
 
+    // Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
+    // where tmp is a fresh pointer variable.
+    fn new_op_assign(
+        op: BinaryOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        ctx: &mut Context,
+        loc: usize,
+    ) -> Result<Box<Expr>> {
+        let var = ctx.new_lvar(&Decl {
+            name: "".to_owned(),
+            ty: Type::new_ptr(&lhs.ty).wrap(),
+        });
+        let expr1 = Expr::new_assign(
+            Expr::new_var(var.clone(), loc),
+            Expr::new_unary(UnaryOp::ADDR, lhs, ctx, loc)?,
+            loc,
+        );
+        let expr2 = Expr::new_assign(
+            Expr::new_unary(UnaryOp::DEREF, Expr::new_var(var.clone(), loc), ctx, loc)?,
+            Expr::new_binary(
+                op,
+                Expr::new_unary(UnaryOp::DEREF, Expr::new_var(var.clone(), loc), ctx, loc)?,
+                rhs,
+                ctx,
+                loc,
+            )?,
+            loc,
+        );
+        Ok(Expr::new_comma(expr1, expr2, loc))
+    }
+
     fn new_binary(
         op: BinaryOp,
         lhs: Box<Expr>,
@@ -1051,36 +1083,6 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     Ok(lhs)
 }
 
-// Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
-// where tmp is a fresh pointer variable.
-fn to_assign(binary: Box<Expr>, ctx: &mut Context) -> Result<Box<Expr>> {
-    let loc = binary.loc;
-    if let ExprKind::Binary { op, lhs, rhs } = binary.kind {
-        let var = ctx.new_lvar(&Decl {
-            name: "".to_owned(),
-            ty: Type::new_ptr(&lhs.ty).wrap(),
-        });
-        let expr1 = Expr::new_assign(
-            Expr::new_var(var.clone(), loc),
-            Expr::new_unary(UnaryOp::ADDR, lhs, ctx, loc)?,
-            loc,
-        );
-        let expr2 = Expr::new_assign(
-            Expr::new_unary(UnaryOp::DEREF, Expr::new_var(var.clone(), loc), ctx, loc)?,
-            Expr::new_binary(
-                op,
-                Expr::new_unary(UnaryOp::DEREF, Expr::new_var(var.clone(), loc), ctx, loc)?,
-                rhs,
-                ctx,
-                loc,
-            )?,
-            loc,
-        );
-        return Ok(Expr::new_comma(expr1, expr2, loc));
-    }
-    unreachable!();
-}
-
 // assign = equality (assign-op assign)?
 // assign-op = "=" | "+=" | "-=" | "*=" | "/="
 fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
@@ -1089,19 +1091,13 @@ fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     if tokenize::consume_punct(tok, "=") {
         Ok(Expr::new_assign(lhs, assign(tok, ctx)?, loc))
     } else if tokenize::consume_punct(tok, "+=") {
-        to_assign(Expr::new_add(lhs, assign(tok, ctx)?, ctx, loc)?, ctx)
+        Expr::new_op_assign(BinaryOp::ADD, lhs, assign(tok, ctx)?, ctx, loc)
     } else if tokenize::consume_punct(tok, "-=") {
-        to_assign(Expr::new_sub(lhs, assign(tok, ctx)?, ctx, loc)?, ctx)
+        Expr::new_op_assign(BinaryOp::SUB, lhs, assign(tok, ctx)?, ctx, loc)
     } else if tokenize::consume_punct(tok, "*=") {
-        to_assign(
-            Expr::new_binary(BinaryOp::MUL, lhs, assign(tok, ctx)?, ctx, loc)?,
-            ctx,
-        )
+        Expr::new_op_assign(BinaryOp::MUL, lhs, assign(tok, ctx)?, ctx, loc)
     } else if tokenize::consume_punct(tok, "/=") {
-        to_assign(
-            Expr::new_binary(BinaryOp::DIV, lhs, assign(tok, ctx)?, ctx, loc)?,
-            ctx,
-        )
+        Expr::new_op_assign(BinaryOp::DIV, lhs, assign(tok, ctx)?, ctx, loc)
     } else {
         Ok(lhs)
     }
@@ -1200,6 +1196,7 @@ fn cast(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 }
 
 // unary = ("+" | "-" | "*" | "&") cast
+//       | ("++" | "--") unary
 //       | postfix
 fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let loc = tok.loc;
@@ -1211,6 +1208,22 @@ fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         Ok(Expr::new_unary(UnaryOp::DEREF, cast(tok, ctx)?, ctx, loc)?)
     } else if tokenize::consume_punct(tok, "&") {
         Ok(Expr::new_unary(UnaryOp::ADDR, cast(tok, ctx)?, ctx, loc)?)
+    } else if tokenize::consume_punct(tok, "++") {
+        Expr::new_op_assign(
+            BinaryOp::ADD,
+            unary(tok, ctx)?,
+            Expr::new_num(1, loc),
+            ctx,
+            loc,
+        )
+    } else if tokenize::consume_punct(tok, "--") {
+        Expr::new_op_assign(
+            BinaryOp::SUB,
+            unary(tok, ctx)?,
+            Expr::new_num(1, loc),
+            ctx,
+            loc,
+        )
     } else {
         postfix(tok, ctx)
     }
