@@ -2,7 +2,7 @@ pub mod codegen;
 pub mod parse;
 pub mod tokenize;
 
-use anyhow::{anyhow, Error};
+use anyhow::{anyhow, Error, Result};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -62,7 +62,7 @@ pub enum TypeKind {
     Int,
     Long,
     Ptr(Rc<RefCell<Type>>),
-    Array(Rc<RefCell<Type>>, usize),
+    Array(Rc<RefCell<Type>>, Option<usize>),
     Func {
         params: Vec<Decl>,
         return_ty: Rc<RefCell<Type>>,
@@ -128,8 +128,8 @@ impl Type {
         }
     }
 
-    fn new_str(len: usize) -> Type {
-        Type::new_array(&Type::new_char().wrap(), len)
+    fn new_str(len: usize, ctx: &Context, loc: usize) -> Type {
+        Type::new_array(&Type::new_char().wrap(), Some(len), ctx, loc).unwrap()
     }
 
     fn new_ptr(base_ty: &Rc<RefCell<Type>>) -> Type {
@@ -140,12 +140,30 @@ impl Type {
         }
     }
 
-    fn new_array(base_ty: &Rc<RefCell<Type>>, len: usize) -> Type {
-        Type {
-            kind: TypeKind::Array(Rc::clone(base_ty), len),
-            size: Some(base_ty.borrow().size.unwrap() * len),
-            align: base_ty.borrow().align,
+    fn new_array(
+        base_ty: &Rc<RefCell<Type>>,
+        len: Option<usize>,
+        ctx: &Context,
+        loc: usize,
+    ) -> Result<Type> {
+        if base_ty.borrow().size.is_none() {
+            return Err(error_message(
+                "array type has imcomplete element type",
+                ctx,
+                loc,
+            ));
         }
+        let sz;
+        if let Some(len) = len {
+            sz = Some(base_ty.borrow().size.unwrap() * len);
+        } else {
+            sz = None;
+        }
+        Ok(Type {
+            kind: TypeKind::Array(Rc::clone(base_ty), len),
+            size: sz,
+            align: base_ty.borrow().align,
+        })
     }
 
     fn new_func(params: Vec<Decl>, return_ty: &Rc<RefCell<Type>>) -> Type {
@@ -418,11 +436,11 @@ impl Context {
         name
     }
 
-    fn new_str(&mut self, bytes: Vec<u8>) -> Obj {
+    fn new_str(&mut self, bytes: Vec<u8>, loc: usize) -> Obj {
         let name = self.new_unique_name();
         let decl = Decl {
             name: name.clone(),
-            ty: Type::new_str(bytes.len() + 1).wrap(),
+            ty: Type::new_str(bytes.len() + 1, self, loc).wrap(),
         };
         let obj = self.new_gvar(&decl);
         self.init_data.insert(name, bytes);

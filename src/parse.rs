@@ -722,6 +722,24 @@ fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
     Ok(params)
 }
 
+fn array_dimensions(
+    tok: &mut &Token,
+    ty: &Rc<RefCell<Type>>,
+    ctx: &mut Context,
+) -> Result<Rc<RefCell<Type>>> {
+    let loc = tok.loc;
+    if tokenize::consume_punct(tok, "]") {
+        let base_ty = type_suffix(tok, ty, ctx)?;
+        let array_ty = Type::new_array(&base_ty, None, ctx, loc)?;
+        return Ok(array_ty.wrap());
+    }
+    let len = tokenize::expect_number(tok, ctx).unwrap() as usize;
+    tokenize::expect_punct(tok, "]", ctx)?;
+    let base_ty = type_suffix(tok, ty, ctx)?;
+    let array_ty = Type::new_array(&base_ty, Some(len), ctx, loc)?;
+    Ok(array_ty.wrap())
+}
+
 // type-suffix = "(" func-params
 //             = "[" num "]" type-suffix
 //             = ε
@@ -734,10 +752,7 @@ fn type_suffix(
         let params = func_params(tok, ctx)?;
         Ok(Type::new_func(params, ty).wrap())
     } else if tokenize::consume_punct(tok, "[") {
-        let len = tokenize::expect_number(tok, ctx)?;
-        tokenize::expect_punct(tok, "]", ctx)?;
-        let base_ty = type_suffix(tok, ty, ctx)?;
-        Ok(Type::new_array(&base_ty, len as usize).wrap())
+        return array_dimensions(tok, ty, ctx);
     } else {
         Ok(Rc::clone(ty))
     }
@@ -1500,7 +1515,7 @@ fn primary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 
     if let Some(bytes) = tokenize::consume_str(tok) {
-        let obj = ctx.new_str(bytes.clone());
+        let obj = ctx.new_str(bytes.clone(), loc);
         return Ok(Expr::new_var(obj, loc));
     }
 
