@@ -83,10 +83,11 @@ pub enum BinaryOp {
 
 #[derive(Clone, Copy, Debug)]
 pub enum UnaryOp {
-    NEG,   // -
-    DEREF, // *
-    ADDR,  // &
-    NOT,   // !
+    NEG,    // -
+    DEREF,  // *
+    ADDR,   // &
+    NOT,    // !
+    BITNOT, // ~
 }
 
 #[derive(Debug)]
@@ -380,6 +381,9 @@ impl Expr {
             }
             UnaryOp::NOT => {
                 result_ty = Type::new_int().wrap();
+            }
+            UnaryOp::BITNOT => {
+                result_ty = Rc::clone(&expr.ty);
             }
         }
         Ok(Box::new(Expr {
@@ -1219,7 +1223,7 @@ fn cast(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 }
 
-// unary = ("+" | "-" | "*" | "&" | "!") cast
+// unary = ("+" | "-" | "*" | "&" | "!" | "~") cast
 //       | ("++" | "--") unary
 //       | postfix
 fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
@@ -1234,6 +1238,8 @@ fn unary(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         Ok(Expr::new_unary(UnaryOp::ADDR, cast(tok, ctx)?, ctx, loc)?)
     } else if tokenize::consume_punct(tok, "!") {
         Ok(Expr::new_unary(UnaryOp::NOT, cast(tok, ctx)?, ctx, loc)?)
+    } else if tokenize::consume_punct(tok, "~") {
+        Ok(Expr::new_unary(UnaryOp::BITNOT, cast(tok, ctx)?, ctx, loc)?)
     } else if tokenize::consume_punct(tok, "++") {
         Expr::new_op_assign(
             BinaryOp::ADD,

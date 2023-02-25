@@ -377,6 +377,10 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                     writeln!(&mut output, "sete al").unwrap();
                     writeln!(&mut output, "movzx rax, al").unwrap();
                 }
+                UnaryOp::BITNOT => {
+                    write!(&mut output, "{}", gen_expr(&operand, ctx)?).unwrap();
+                    writeln!(&mut output, "not rax").unwrap();
+                }
             };
         }
         ExprKind::Comma { lhs, rhs } => {
