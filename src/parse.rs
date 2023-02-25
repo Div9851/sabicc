@@ -71,15 +71,18 @@ impl Stmt {
 
 #[derive(Clone, Copy, Debug)]
 pub enum BinaryOp {
-    ADD, // +
-    SUB, // -
-    MUL, // *
-    DIV, // /
-    MOD, // %
-    EQ,  // ==
-    NE,  // !=
-    LT,  // <
-    LE,  // <=
+    ADD,    // +
+    SUB,    // -
+    MUL,    // *
+    DIV,    // /
+    MOD,    // %
+    BITAND, // &
+    BITOR,  // |
+    BITXOR, // ^
+    EQ,     // ==
+    NE,     // !=
+    LT,     // <
+    LE,     // <=
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -231,7 +234,12 @@ impl Expr {
         match op {
             BinaryOp::ADD => Expr::new_add(lhs, rhs, ctx, loc),
             BinaryOp::SUB => Expr::new_sub(lhs, rhs, ctx, loc),
-            BinaryOp::MUL | BinaryOp::DIV | BinaryOp::MOD => {
+            BinaryOp::MUL
+            | BinaryOp::DIV
+            | BinaryOp::MOD
+            | BinaryOp::BITAND
+            | BinaryOp::BITXOR
+            | BinaryOp::BITOR => {
                 if lhs.ty.borrow().is_integer() && rhs.ty.borrow().is_integer() {
                     let (lhs, rhs) = usual_arith_conv(lhs, rhs);
                     let ty = Rc::clone(&lhs.ty);
@@ -1112,10 +1120,10 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     Ok(lhs)
 }
 
-// assign = equality (assign-op assign)?
-// assign-op = "=" | "+=" | "-=" | "*=" | "/="
+// assign = bitor (assign-op assign)?
+// assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "&=" | "|=" | "^="
 fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
-    let lhs = equality(tok, ctx)?;
+    let lhs = bitor(tok, ctx)?;
     let loc = tok.loc;
     if tokenize::consume_punct(tok, "=") {
         Ok(Expr::new_assign(lhs, assign(tok, ctx)?, loc))
@@ -1129,8 +1137,53 @@ fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         Expr::new_op_assign(BinaryOp::DIV, lhs, assign(tok, ctx)?, ctx, loc)
     } else if tokenize::consume_punct(tok, "%=") {
         Expr::new_op_assign(BinaryOp::MOD, lhs, assign(tok, ctx)?, ctx, loc)
+    } else if tokenize::consume_punct(tok, "&=") {
+        Expr::new_op_assign(BinaryOp::BITAND, lhs, assign(tok, ctx)?, ctx, loc)
+    } else if tokenize::consume_punct(tok, "|=") {
+        Expr::new_op_assign(BinaryOp::BITOR, lhs, assign(tok, ctx)?, ctx, loc)
+    } else if tokenize::consume_punct(tok, "^=") {
+        Expr::new_op_assign(BinaryOp::BITXOR, lhs, assign(tok, ctx)?, ctx, loc)
     } else {
         Ok(lhs)
+    }
+}
+
+// bitor= bitxor ("^" bitxor)*
+fn bitor(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
+    let mut expr = bitxor(tok, ctx)?;
+    loop {
+        let loc = tok.loc;
+        if tokenize::consume_punct(tok, "|") {
+            expr = Expr::new_binary(BinaryOp::BITOR, expr, bitxor(tok, ctx)?, ctx, loc)?;
+            continue;
+        }
+        break Ok(expr);
+    }
+}
+
+// bitxor= bitand ("^" bitand)*
+fn bitxor(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
+    let mut expr = bitand(tok, ctx)?;
+    loop {
+        let loc = tok.loc;
+        if tokenize::consume_punct(tok, "^") {
+            expr = Expr::new_binary(BinaryOp::BITXOR, expr, bitand(tok, ctx)?, ctx, loc)?;
+            continue;
+        }
+        break Ok(expr);
+    }
+}
+
+// bitand = equality ("&" equality)*
+fn bitand(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
+    let mut expr = equality(tok, ctx)?;
+    loop {
+        let loc = tok.loc;
+        if tokenize::consume_punct(tok, "&") {
+            expr = Expr::new_binary(BinaryOp::BITAND, expr, equality(tok, ctx)?, ctx, loc)?;
+            continue;
+        }
+        break Ok(expr);
     }
 }
 

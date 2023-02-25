@@ -342,6 +342,15 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                         writeln!(&mut output, "  mov rax, rdx").unwrap();
                     }
                 }
+                BinaryOp::BITAND => {
+                    writeln!(&mut output, "  and rax, rdi").unwrap();
+                }
+                BinaryOp::BITOR => {
+                    writeln!(&mut output, "  or rax, rdi").unwrap();
+                }
+                BinaryOp::BITXOR => {
+                    writeln!(&mut output, "  xor rax, rdi").unwrap();
+                }
                 BinaryOp::EQ => {
                     writeln!(&mut output, "  cmp {}, {}", ax, di).unwrap();
                     writeln!(&mut output, "  sete al").unwrap();

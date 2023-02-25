@@ -133,6 +133,9 @@ fn read_punct(bytes: &[u8]) -> usize {
         || bytes.starts_with(b"*=")
         || bytes.starts_with(b"/=")
         || bytes.starts_with(b"%=")
+        || bytes.starts_with(b"&=")
+        || bytes.starts_with(b"|=")
+        || bytes.starts_with(b"^=")
         || bytes.starts_with(b"++")
         || bytes.starts_with(b"--")
     {
