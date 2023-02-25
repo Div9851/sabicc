@@ -79,6 +79,8 @@ pub enum BinaryOp {
     BITAND, // &
     BITOR,  // |
     BITXOR, // ^
+    LOGAND, // &&
+    LOGOR,  // ||
     EQ,     // ==
     NE,     // !=
     LT,     // <
@@ -253,7 +255,12 @@ impl Expr {
                     Err(error_message("invalid operands", ctx, loc))
                 }
             }
-            BinaryOp::EQ | BinaryOp::NE | BinaryOp::LT | BinaryOp::LE => {
+            BinaryOp::EQ
+            | BinaryOp::NE
+            | BinaryOp::LT
+            | BinaryOp::LE
+            | BinaryOp::LOGAND
+            | BinaryOp::LOGOR => {
                 let (lhs, rhs) = usual_arith_conv(lhs, rhs);
                 let expr = Expr {
                     kind: ExprKind::Binary { op, lhs, rhs },
@@ -1120,10 +1127,10 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     Ok(lhs)
 }
 
-// assign = bitor (assign-op assign)?
+// assign = logor (assign-op assign)?
 // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "&=" | "|=" | "^="
 fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
-    let lhs = bitor(tok, ctx)?;
+    let lhs = logor(tok, ctx)?;
     let loc = tok.loc;
     if tokenize::consume_punct(tok, "=") {
         Ok(Expr::new_assign(lhs, assign(tok, ctx)?, loc))
@@ -1145,6 +1152,32 @@ fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         Expr::new_op_assign(BinaryOp::BITXOR, lhs, assign(tok, ctx)?, ctx, loc)
     } else {
         Ok(lhs)
+    }
+}
+
+// logor = logand ("||" logand)*
+fn logor(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
+    let mut expr = logand(tok, ctx)?;
+    loop {
+        let loc = tok.loc;
+        if tokenize::consume_punct(tok, "||") {
+            expr = Expr::new_binary(BinaryOp::LOGOR, expr, logand(tok, ctx)?, ctx, loc)?;
+            continue;
+        }
+        break Ok(expr);
+    }
+}
+
+// logand = bitor ("&&" bitor)*
+fn logand(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
+    let mut expr = bitor(tok, ctx)?;
+    loop {
+        let loc = tok.loc;
+        if tokenize::consume_punct(tok, "&&") {
+            expr = Expr::new_binary(BinaryOp::LOGAND, expr, bitor(tok, ctx)?, ctx, loc)?;
+            continue;
+        }
+        break Ok(expr);
     }
 }
 

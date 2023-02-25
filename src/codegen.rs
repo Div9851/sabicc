@@ -351,6 +351,36 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                 BinaryOp::BITXOR => {
                     writeln!(&mut output, "  xor rax, rdi").unwrap();
                 }
+                BinaryOp::LOGAND => {
+                    let id = ctx.id;
+                    ctx.id += 1;
+                    write!(&mut output, "{}", gen_expr(lhs, ctx)?).unwrap();
+                    writeln!(&mut output, "  cmp rax, 0").unwrap();
+                    writeln!(&mut output, "  je .L.false.{}", id).unwrap();
+                    write!(&mut output, "{}", gen_expr(rhs, ctx)?).unwrap();
+                    writeln!(&mut output, "  cmp rax, 0").unwrap();
+                    writeln!(&mut output, "  je .L.false.{}", id).unwrap();
+                    writeln!(&mut output, "  mov rax, 1").unwrap();
+                    writeln!(&mut output, "  jmp .L.end.{}", id).unwrap();
+                    writeln!(&mut output, ".L.false.{}:", id).unwrap();
+                    writeln!(&mut output, "  mov rax, 0").unwrap();
+                    writeln!(&mut output, ".L.end.{}:", id).unwrap();
+                }
+                BinaryOp::LOGOR => {
+                    let id = ctx.id;
+                    ctx.id += 1;
+                    write!(&mut output, "{}", gen_expr(lhs, ctx)?).unwrap();
+                    writeln!(&mut output, "  cmp rax, 0").unwrap();
+                    writeln!(&mut output, "  jne .L.true.{}", id).unwrap();
+                    write!(&mut output, "{}", gen_expr(rhs, ctx)?).unwrap();
+                    writeln!(&mut output, "  cmp rax, 0").unwrap();
+                    writeln!(&mut output, "  jne .L.true.{}", id).unwrap();
+                    writeln!(&mut output, "  mov rax, 0").unwrap();
+                    writeln!(&mut output, "  jmp .L.end.{}", id).unwrap();
+                    writeln!(&mut output, ".L.true.{}:", id).unwrap();
+                    writeln!(&mut output, "  mov rax, 1").unwrap();
+                    writeln!(&mut output, ".L.end.{}:", id).unwrap();
+                }
                 BinaryOp::EQ => {
                     writeln!(&mut output, "  cmp {}, {}", ax, di).unwrap();
                     writeln!(&mut output, "  sete al").unwrap();
