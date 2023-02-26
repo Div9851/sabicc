@@ -1080,7 +1080,7 @@ fn compound_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let mut block = Vec::new();
     ctx.enter_scope();
     while !tokenize::consume_punct(tok, "}") {
-        if is_typename(tok, ctx) {
+        if is_typename(tok, ctx) && !tokenize::equal_punct(tok.next.as_ref().unwrap(), ":") {
             let spec = declspec(tok, ctx, true)?;
             if spec.attr.is_typedef {
                 parse_typedef(tok, &spec.ty, ctx)?;
