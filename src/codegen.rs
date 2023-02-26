@@ -257,6 +257,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             inc,
             body,
             break_label,
+            continue_label,
         } => {
             for init_stmt in init {
                 write!(&mut output, "{}", gen_stmt(init_stmt, ctx)?).unwrap();
@@ -270,6 +271,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
                 writeln!(&mut output, "  je {}", break_label).unwrap();
             }
             write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
+            writeln!(&mut output, "{}:", continue_label).unwrap();
             if let Some(inc) = inc {
                 write!(&mut output, "{}", gen_expr(inc, ctx)?).unwrap();
             }
@@ -281,6 +283,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             cond,
             body,
             break_label,
+            continue_label,
         } => {
             let id = ctx.id;
             ctx.id += 1;
@@ -289,6 +292,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             writeln!(&mut output, "  cmp rax, 0").unwrap();
             writeln!(&mut output, "  je {}", break_label).unwrap();
             write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
+            writeln!(&mut output, "{}:", continue_label).unwrap();
             writeln!(&mut output, "  jmp .L.begin.{}", id).unwrap();
             writeln!(&mut output, "{}:", break_label).unwrap();
             Ok(output)

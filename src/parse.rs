@@ -47,11 +47,13 @@ pub enum StmtKind {
         inc: Option<Box<Expr>>,
         body: Box<Stmt>,
         break_label: String,
+        continue_label: String,
     },
     WhileStmt {
         cond: Box<Expr>,
         body: Box<Stmt>,
         break_label: String,
+        continue_label: String,
     },
     Label(String, Box<Stmt>),
     Goto(String),
@@ -1044,6 +1046,16 @@ fn stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
             kind: StmtKind::Goto(ctx.break_label.as_ref().unwrap().clone()),
             loc,
         }))
+    } else if tokenize::consume_punct(tok, "continue") {
+        let loc = tok.loc;
+        tokenize::expect_punct(tok, ";", ctx)?;
+        if ctx.continue_label.is_none() {
+            return Err(error_message("stray continue", ctx, loc));
+        }
+        Ok(Box::new(Stmt {
+            kind: StmtKind::Goto(ctx.continue_label.as_ref().unwrap().clone()),
+            loc,
+        }))
     } else if tokenize::equal_ident(tok) && tokenize::equal_punct(tok.next.as_ref().unwrap(), ":") {
         let loc = tok.loc;
         let ident = tokenize::consume_ident(tok).unwrap();
@@ -1145,6 +1157,9 @@ fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let break_label = ctx.new_unique_name();
     let brk = ctx.break_label.take();
     ctx.break_label = Some(break_label.clone());
+    let continue_label = ctx.new_unique_name();
+    let cont = ctx.continue_label.take();
+    ctx.continue_label = Some(continue_label.clone());
     let loc = tok.loc;
     tokenize::expect_punct(tok, "for", ctx)?;
     tokenize::expect_punct(tok, "(", ctx)?;
@@ -1175,10 +1190,12 @@ fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
             inc,
             body,
             break_label,
+            continue_label,
         },
         loc,
     };
     ctx.break_label = brk;
+    ctx.continue_label = cont;
     Ok(Box::new(stmt))
 }
 
@@ -1186,6 +1203,9 @@ fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let break_label = ctx.new_unique_name();
     let brk = ctx.break_label.take();
     ctx.break_label = Some(break_label.clone());
+    let continue_label = ctx.new_unique_name();
+    let cont = ctx.continue_label.take();
+    ctx.continue_label = Some(continue_label.clone());
     let loc = tok.loc;
     tokenize::expect_punct(tok, "while", ctx)?;
     tokenize::expect_punct(tok, "(", ctx)?;
@@ -1197,10 +1217,12 @@ fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
             cond,
             body,
             break_label,
+            continue_label,
         },
         loc,
     };
     ctx.break_label = brk;
+    ctx.continue_label = cont;
     Ok(Box::new(stmt))
 }
 

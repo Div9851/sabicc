@@ -169,6 +169,7 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "static"
         || tok.text == "goto"
         || tok.text == "break"
+        || tok.text == "continue"
     {
         tok.kind = TokenKind::Keyword;
     }
