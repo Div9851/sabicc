@@ -165,8 +165,9 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "enum"
         || tok.text == "void"
         || tok.text == "typedef"
-        || tok.text == "static"
         || tok.text == "_Bool"
+        || tok.text == "static"
+        || tok.text == "goto"
     {
         tok.kind = TokenKind::Keyword;
     }

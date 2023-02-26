@@ -51,6 +51,8 @@ pub enum StmtKind {
         cond: Box<Expr>,
         body: Box<Stmt>,
     },
+    Label(String, Box<Stmt>),
+    Goto(String),
 }
 
 #[derive(Debug)]
@@ -541,6 +543,7 @@ pub fn func(
     ctx.new_gvar(&decl);
     ctx.return_ty = Rc::clone(&ty.get_return_ty());
     ctx.stack_size = 0;
+    ctx.labels.clear();
     ctx.enter_scope();
     let param_decls = ty.get_params();
     let mut params = Vec::new();
@@ -994,6 +997,8 @@ fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Contex
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "for" "(" expr-stmt? ";" expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
+//      | "goto" ident ";"
+//      | ident ":" stmt
 //      | "{" block-item* "}"
 //      | expr-stmt
 //      | null-stmt
@@ -1010,6 +1015,37 @@ fn stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         Ok(for_stmt(tok, ctx)?)
     } else if tokenize::equal_punct(tok, "while") {
         Ok(while_stmt(tok, ctx)?)
+    } else if tokenize::equal_punct(tok, "goto") {
+        let loc = tok.loc;
+        tokenize::consume_punct(tok, "goto");
+        let ident = tokenize::expect_ident(tok, ctx)?;
+        let unique_name;
+        if let Some(name) = ctx.labels.get(ident) {
+            unique_name = name.clone();
+        } else {
+            unique_name = ctx.new_unique_name();
+            ctx.labels.insert(ident.to_owned(), unique_name.clone());
+        }
+        tokenize::expect_punct(tok, ";", ctx)?;
+        Ok(Box::new(Stmt {
+            kind: StmtKind::Goto(unique_name),
+            loc,
+        }))
+    } else if tokenize::equal_ident(tok) && tokenize::equal_punct(tok.next.as_ref().unwrap(), ":") {
+        let loc = tok.loc;
+        let ident = tokenize::consume_ident(tok).unwrap();
+        let unique_name;
+        if let Some(name) = ctx.labels.get(ident) {
+            unique_name = name.clone();
+        } else {
+            unique_name = ctx.new_unique_name();
+            ctx.labels.insert(ident.to_owned(), unique_name.clone());
+        }
+        tokenize::consume_punct(tok, ":");
+        Ok(Box::new(Stmt {
+            kind: StmtKind::Label(unique_name, stmt(tok, ctx)?),
+            loc,
+        }))
     } else {
         Ok(expr_stmt(tok, ctx)?)
     }

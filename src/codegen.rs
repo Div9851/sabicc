@@ -288,6 +288,15 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             writeln!(&mut output, ".L.end.{}:", id).unwrap();
             Ok(output)
         }
+        StmtKind::Label(label, stmt) => {
+            writeln!(&mut output, "{}:", label).unwrap();
+            write!(&mut output, "{}", gen_stmt(stmt, ctx)?).unwrap();
+            Ok(output)
+        }
+        StmtKind::Goto(label) => {
+            writeln!(&mut output, "  jmp {}", label).unwrap();
+            Ok(output)
+        }
     }
 }
 
