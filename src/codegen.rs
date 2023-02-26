@@ -256,6 +256,7 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             cond,
             inc,
             body,
+            break_label,
         } => {
             for init_stmt in init {
                 write!(&mut output, "{}", gen_stmt(init_stmt, ctx)?).unwrap();
@@ -266,26 +267,30 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             if let Some(cond) = cond {
                 write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();
                 writeln!(&mut output, "  cmp rax, 0").unwrap();
-                writeln!(&mut output, "  je .L.end.{}", id).unwrap();
+                writeln!(&mut output, "  je {}", break_label).unwrap();
             }
             write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
             if let Some(inc) = inc {
                 write!(&mut output, "{}", gen_expr(inc, ctx)?).unwrap();
             }
             writeln!(&mut output, "  jmp .L.begin.{}", id).unwrap();
-            writeln!(&mut output, ".L.end.{}:", id).unwrap();
+            writeln!(&mut output, "{}:", break_label).unwrap();
             Ok(output)
         }
-        StmtKind::WhileStmt { cond, body } => {
+        StmtKind::WhileStmt {
+            cond,
+            body,
+            break_label,
+        } => {
             let id = ctx.id;
             ctx.id += 1;
             writeln!(&mut output, ".L.begin.{}:", id).unwrap();
             write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();
             writeln!(&mut output, "  cmp rax, 0").unwrap();
-            writeln!(&mut output, "  je .L.end.{}", id).unwrap();
+            writeln!(&mut output, "  je {}", break_label).unwrap();
             write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
             writeln!(&mut output, "  jmp .L.begin.{}", id).unwrap();
-            writeln!(&mut output, ".L.end.{}:", id).unwrap();
+            writeln!(&mut output, "{}:", break_label).unwrap();
             Ok(output)
         }
         StmtKind::Label(label, stmt) => {

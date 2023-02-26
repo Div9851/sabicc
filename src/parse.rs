@@ -46,10 +46,12 @@ pub enum StmtKind {
         cond: Option<Box<Expr>>,
         inc: Option<Box<Expr>>,
         body: Box<Stmt>,
+        break_label: String,
     },
     WhileStmt {
         cond: Box<Expr>,
         body: Box<Stmt>,
+        break_label: String,
     },
     Label(String, Box<Stmt>),
     Goto(String),
@@ -998,6 +1000,7 @@ fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Contex
 //      | "for" "(" expr-stmt? ";" expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
 //      | "goto" ident ";"
+//      | "break" ";"
 //      | ident ":" stmt
 //      | "{" block-item* "}"
 //      | expr-stmt
@@ -1029,6 +1032,16 @@ fn stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         tokenize::expect_punct(tok, ";", ctx)?;
         Ok(Box::new(Stmt {
             kind: StmtKind::Goto(unique_name),
+            loc,
+        }))
+    } else if tokenize::consume_punct(tok, "break") {
+        let loc = tok.loc;
+        tokenize::expect_punct(tok, ";", ctx)?;
+        if ctx.break_label.is_none() {
+            return Err(error_message("stray break", ctx, loc));
+        }
+        Ok(Box::new(Stmt {
+            kind: StmtKind::Goto(ctx.break_label.as_ref().unwrap().clone()),
             loc,
         }))
     } else if tokenize::equal_ident(tok) && tokenize::equal_punct(tok.next.as_ref().unwrap(), ":") {
@@ -1129,6 +1142,9 @@ fn if_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
 }
 
 fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let break_label = ctx.new_unique_name();
+    let brk = ctx.break_label.take();
+    ctx.break_label = Some(break_label.clone());
     let loc = tok.loc;
     tokenize::expect_punct(tok, "for", ctx)?;
     tokenize::expect_punct(tok, "(", ctx)?;
@@ -1158,13 +1174,18 @@ fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
             cond,
             inc,
             body,
+            break_label,
         },
         loc,
     };
+    ctx.break_label = brk;
     Ok(Box::new(stmt))
 }
 
 fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let break_label = ctx.new_unique_name();
+    let brk = ctx.break_label.take();
+    ctx.break_label = Some(break_label.clone());
     let loc = tok.loc;
     tokenize::expect_punct(tok, "while", ctx)?;
     tokenize::expect_punct(tok, "(", ctx)?;
@@ -1172,9 +1193,14 @@ fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     tokenize::expect_punct(tok, ")", ctx)?;
     let body = stmt(tok, ctx)?;
     let stmt = Stmt {
-        kind: StmtKind::WhileStmt { cond, body },
+        kind: StmtKind::WhileStmt {
+            cond,
+            body,
+            break_label,
+        },
         loc,
     };
+    ctx.break_label = brk;
     Ok(Box::new(stmt))
 }
 
