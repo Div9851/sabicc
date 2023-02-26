@@ -716,7 +716,19 @@ fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
             tokenize::expect_punct(tok, ",", ctx)?;
         }
         let spec = declspec(tok, ctx, false)?;
-        let param = declarator(tok, &spec.ty, ctx)?;
+        let mut param = declarator(tok, &spec.ty, ctx)?;
+
+        // "array of T" is converted to "pointer to T" only in the parameter
+        // context. For example, *argv[] is converted to **argv by this.
+        if param.ty.borrow().is_array() {
+            let Decl { name, ty } = param;
+            let ty = ty.borrow();
+            let base_ty = ty.get_base_ty();
+            param = Decl {
+                name,
+                ty: Type::new_ptr(&base_ty).wrap(),
+            };
+        }
         params.push(param);
     }
     Ok(params)
