@@ -518,6 +518,71 @@ impl Expr {
     }
 }
 
+fn eval(expr: &Box<Expr>, ctx: &Context) -> Result<i64> {
+    let err = Err(error_message("not a compile-time constant", ctx, expr.loc));
+    match &expr.kind {
+        ExprKind::Binary { op, lhs, rhs } => {
+            let lhs = eval(lhs, ctx)?;
+            let rhs = eval(rhs, ctx)?;
+            match op {
+                BinaryOp::ADD => Ok(lhs.wrapping_add(rhs)),
+                BinaryOp::SUB => Ok(lhs.wrapping_sub(rhs)),
+                BinaryOp::MUL => Ok(lhs.wrapping_mul(rhs)),
+                BinaryOp::DIV => Ok(lhs.wrapping_div(rhs)),
+                BinaryOp::MOD => Ok(lhs.wrapping_rem(rhs)),
+                BinaryOp::BITAND => Ok(lhs & rhs),
+                BinaryOp::BITOR => Ok(lhs | rhs),
+                BinaryOp::BITXOR => Ok(lhs ^ rhs),
+                BinaryOp::SHL => Ok(lhs.wrapping_shl(rhs as u32)),
+                BinaryOp::SHR => Ok(lhs.wrapping_shr(rhs as u32)),
+                BinaryOp::EQ => Ok((lhs == rhs) as i64),
+                BinaryOp::NE => Ok((lhs != rhs) as i64),
+                BinaryOp::LT => Ok((lhs < rhs) as i64),
+                BinaryOp::LE => Ok((lhs <= rhs) as i64),
+                BinaryOp::LOGAND => Ok(((lhs != 0) && (rhs != 0)) as i64),
+                BinaryOp::LOGOR => Ok(((lhs != 0) || (rhs != 0)) as i64),
+            }
+        }
+        ExprKind::Unary { op, expr: operand } => {
+            let operand = eval(operand, ctx)?;
+            match op {
+                UnaryOp::NOT => Ok((operand == 0) as i64),
+                UnaryOp::BITNOT => Ok(!operand),
+                UnaryOp::NEG => Ok(-operand),
+                _ => err,
+            }
+        }
+        ExprKind::Cast(operand) => {
+            let ty = expr.ty.borrow();
+            let operand = eval(operand, ctx)?;
+            if ty.is_integer() {
+                let sz = ty.size.unwrap();
+                if sz == 1 {
+                    return Ok(((operand & 0xff) as i8) as i64);
+                } else if sz == 2 {
+                    return Ok(((operand & 0xffff) as i16) as i64);
+                } else if sz == 4 {
+                    return Ok(((operand & 0xffffffff) as i32) as i64);
+                }
+            }
+            Ok(operand)
+        }
+        ExprKind::Cond { cond, then, els } => {
+            let cond = eval(cond, ctx)?;
+            let then = eval(then, ctx)?;
+            let els = eval(els, ctx)?;
+            if cond != 0 {
+                Ok(then)
+            } else {
+                Ok(els)
+            }
+        }
+        ExprKind::Comma { rhs, .. } => eval(rhs, ctx),
+        ExprKind::Num(val) => Ok(*val),
+        _ => err,
+    }
+}
+
 pub fn program(text: String, filename: &str) -> Result<Program> {
     let mut program = Program::new(text, filename.to_owned());
     let head = tokenize::tokenize(&program.ctx.text, &program.ctx)?;
@@ -764,6 +829,7 @@ fn func_params(tok: &mut &Token, ctx: &mut Context) -> Result<Vec<Decl>> {
     Ok(params)
 }
 
+// array-dimensions = const-expr? "]" type-suffix
 fn array_dimensions(
     tok: &mut &Token,
     ty: &Rc<RefCell<Type>>,
@@ -775,15 +841,15 @@ fn array_dimensions(
         let array_ty = Type::new_array(&base_ty, None, ctx, loc)?;
         return Ok(array_ty.wrap());
     }
-    let len = tokenize::expect_number(tok, ctx).unwrap() as usize;
+    let len = const_expr(tok, ctx)?;
     tokenize::expect_punct(tok, "]", ctx)?;
     let base_ty = type_suffix(tok, ty, ctx)?;
-    let array_ty = Type::new_array(&base_ty, Some(len), ctx, loc)?;
+    let array_ty = Type::new_array(&base_ty, Some(len as usize), ctx, loc)?;
     Ok(array_ty.wrap())
 }
 
 // type-suffix = "(" func-params
-//             = "[" num "]" type-suffix
+//             = "[" array-dimensions
 //             = ε
 fn type_suffix(
     tok: &mut &Token,
@@ -994,7 +1060,7 @@ fn enum_specifier(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type
         first = false;
         let name = tokenize::expect_ident(tok, ctx)?;
         if tokenize::consume_punct(tok, "=") {
-            val = tokenize::expect_number(tok, ctx)?;
+            val = const_expr(tok, ctx)?;
         }
         ctx.new_enum_const(name, val);
         val += 1;
@@ -1023,7 +1089,7 @@ fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Contex
 // stmt = "return" expr ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "switch" "(" expr ")" stmt
-//      | "case" num ":" stmt
+//      | "case" const-expr":" stmt
 //      | "default" ":" stmt
 //      | "for" "(" expr-stmt? ";" expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
@@ -1177,7 +1243,7 @@ fn case_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let case_label = ctx.new_unique_name();
     let loc = tok.loc;
     tokenize::expect_punct(tok, "case", ctx)?;
-    let num = tokenize::expect_number(tok, ctx)?;
+    let num = const_expr(tok, ctx)?;
     tokenize::expect_punct(tok, ":", ctx)?;
     if ctx.case_labels.is_none() {
         return Err(error_message("stray case", ctx, loc));
@@ -1346,6 +1412,11 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         return Ok(Expr::new_comma(lhs, rhs, loc));
     }
     Ok(lhs)
+}
+
+fn const_expr(tok: &mut &Token, ctx: &mut Context) -> Result<i64> {
+    let expr = conditional(tok, ctx)?;
+    eval(&expr, ctx)
 }
 
 // assign = conditional (assign-op assign)?
