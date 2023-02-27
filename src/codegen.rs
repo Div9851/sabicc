@@ -547,6 +547,18 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                 _ => {}
             }
         }
+        ExprKind::Cond { cond, then, els } => {
+            let id = ctx.id;
+            ctx.id += 1;
+            write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();
+            writeln!(&mut output, "  cmp rax, 0").unwrap();
+            writeln!(&mut output, "  je .L.else.{}", id).unwrap();
+            write!(&mut output, "{}", gen_expr(then, ctx)?).unwrap();
+            writeln!(&mut output, "  jmp .L.end.{}", id).unwrap();
+            writeln!(&mut output, ".L.else.{}:", id).unwrap();
+            write!(&mut output, "{}", gen_expr(els, ctx)?).unwrap();
+            writeln!(&mut output, ".L.end.{}:", id).unwrap();
+        }
     };
     Ok(output)
 }

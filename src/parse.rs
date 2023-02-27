@@ -142,6 +142,11 @@ pub enum ExprKind {
         args: Vec<Box<Expr>>,
     },
     Cast(Box<Expr>),
+    Cond {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        els: Box<Expr>,
+    },
 }
 
 #[derive(Debug)]
@@ -1343,11 +1348,11 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     Ok(lhs)
 }
 
-// assign = logor (assign-op assign)?
+// assign = conditional (assign-op assign)?
 // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "&=" | "|=" | "^="
 //           | "<<=" | ">>="
 fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
-    let lhs = logor(tok, ctx)?;
+    let lhs = conditional(tok, ctx)?;
     let loc = tok.loc;
     if tokenize::consume_punct(tok, "=") {
         Ok(Expr::new_assign(lhs, assign(tok, ctx)?, loc))
@@ -1374,6 +1379,31 @@ fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     } else {
         Ok(lhs)
     }
+}
+
+// conditional = logor ("?" expr ":" conditional)?
+fn conditional(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
+    let loc = tok.loc;
+    let cond = logor(tok, ctx)?;
+    if !tokenize::equal_punct(tok, "?") {
+        return Ok(cond);
+    }
+    tokenize::expect_punct(tok, "?", ctx)?;
+    let mut then = expr(tok, ctx)?;
+    tokenize::expect_punct(tok, ":", ctx)?;
+    let mut els = conditional(tok, ctx)?;
+    let result_ty;
+    if then.ty.borrow().is_void() || els.ty.borrow().is_void() {
+        result_ty = Type::new_void().wrap();
+    } else {
+        (then, els) = usual_arith_conv(then, els);
+        result_ty = Rc::clone(&then.ty);
+    }
+    Ok(Box::new(Expr {
+        kind: ExprKind::Cond { cond, then, els },
+        ty: result_ty,
+        loc,
+    }))
 }
 
 // logor = logand ("||" logand)*
