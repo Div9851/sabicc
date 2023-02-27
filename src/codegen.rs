@@ -236,6 +236,32 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             }
             Ok(output)
         }
+        StmtKind::SwitchStmt {
+            cond,
+            body,
+            case_labels,
+            default_label,
+            break_label,
+        } => {
+            write!(&mut output, "{}", gen_expr(cond, ctx)?).unwrap();
+            for (val, label) in case_labels {
+                let reg;
+                if cond.ty.borrow().size.unwrap() == 8 {
+                    reg = "rax";
+                } else {
+                    reg = "eax";
+                }
+                writeln!(&mut output, "  cmp {}, {}", reg, val).unwrap();
+                writeln!(&mut output, "  je {}", label).unwrap();
+            }
+            if let Some(default_label) = default_label {
+                writeln!(&mut output, "  jmp {}", default_label).unwrap();
+            }
+            writeln!(&mut output, "  jmp {}", break_label).unwrap();
+            write!(&mut output, "{}", gen_stmt(body, ctx)?).unwrap();
+            writeln!(&mut output, "{}:", break_label).unwrap();
+            Ok(output)
+        }
         StmtKind::IfStmt { cond, then, els } => {
             let id = ctx.id;
             ctx.id += 1;

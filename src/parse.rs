@@ -36,6 +36,13 @@ pub enum StmtKind {
     ReturnStmt(Box<Expr>),
     CompoundStmt(Vec<Box<Stmt>>),
     ExprStmt(Box<Expr>),
+    SwitchStmt {
+        cond: Box<Expr>,
+        body: Box<Stmt>,
+        case_labels: Vec<(i64, String)>,
+        default_label: Option<String>,
+        break_label: String,
+    },
     IfStmt {
         cond: Box<Expr>,
         then: Box<Stmt>,
@@ -999,6 +1006,9 @@ fn parse_typedef(tok: &mut &Token, base_ty: &Rc<RefCell<Type>>, ctx: &mut Contex
 
 // stmt = "return" expr ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
+//      | "switch" "(" expr ")" stmt
+//      | "case" num ":" stmt
+//      | "default" ":" stmt
 //      | "for" "(" expr-stmt? ";" expr? ";" expr? ")" stmt
 //      | "while" "(" expr ")" stmt
 //      | "goto" ident ";"
@@ -1016,61 +1026,24 @@ fn stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         Ok(compound_stmt(tok, ctx)?)
     } else if tokenize::equal_punct(tok, "if") {
         Ok(if_stmt(tok, ctx)?)
+    } else if tokenize::equal_punct(tok, "switch") {
+        Ok(switch_stmt(tok, ctx)?)
+    } else if tokenize::equal_punct(tok, "case") {
+        Ok(case_stmt(tok, ctx)?)
+    } else if tokenize::equal_punct(tok, "default") {
+        Ok(default_stmt(tok, ctx)?)
     } else if tokenize::equal_punct(tok, "for") {
         Ok(for_stmt(tok, ctx)?)
     } else if tokenize::equal_punct(tok, "while") {
         Ok(while_stmt(tok, ctx)?)
     } else if tokenize::equal_punct(tok, "goto") {
-        let loc = tok.loc;
-        tokenize::consume_punct(tok, "goto");
-        let ident = tokenize::expect_ident(tok, ctx)?;
-        let unique_name;
-        if let Some(name) = ctx.labels.get(ident) {
-            unique_name = name.clone();
-        } else {
-            unique_name = ctx.new_unique_name();
-            ctx.labels.insert(ident.to_owned(), unique_name.clone());
-        }
-        tokenize::expect_punct(tok, ";", ctx)?;
-        Ok(Box::new(Stmt {
-            kind: StmtKind::Goto(unique_name),
-            loc,
-        }))
-    } else if tokenize::consume_punct(tok, "break") {
-        let loc = tok.loc;
-        tokenize::expect_punct(tok, ";", ctx)?;
-        if ctx.break_label.is_none() {
-            return Err(error_message("stray break", ctx, loc));
-        }
-        Ok(Box::new(Stmt {
-            kind: StmtKind::Goto(ctx.break_label.as_ref().unwrap().clone()),
-            loc,
-        }))
-    } else if tokenize::consume_punct(tok, "continue") {
-        let loc = tok.loc;
-        tokenize::expect_punct(tok, ";", ctx)?;
-        if ctx.continue_label.is_none() {
-            return Err(error_message("stray continue", ctx, loc));
-        }
-        Ok(Box::new(Stmt {
-            kind: StmtKind::Goto(ctx.continue_label.as_ref().unwrap().clone()),
-            loc,
-        }))
+        Ok(goto_stmt(tok, ctx)?)
+    } else if tokenize::equal_punct(tok, "break") {
+        Ok(break_stmt(tok, ctx)?)
+    } else if tokenize::equal_punct(tok, "continue") {
+        Ok(continue_stmt(tok, ctx)?)
     } else if tokenize::equal_ident(tok) && tokenize::equal_punct(tok.next.as_ref().unwrap(), ":") {
-        let loc = tok.loc;
-        let ident = tokenize::consume_ident(tok).unwrap();
-        let unique_name;
-        if let Some(name) = ctx.labels.get(ident) {
-            unique_name = name.clone();
-        } else {
-            unique_name = ctx.new_unique_name();
-            ctx.labels.insert(ident.to_owned(), unique_name.clone());
-        }
-        tokenize::consume_punct(tok, ":");
-        Ok(Box::new(Stmt {
-            kind: StmtKind::Label(unique_name, stmt(tok, ctx)?),
-            loc,
-        }))
+        Ok(labeled_stmt(tok, ctx)?)
     } else {
         Ok(expr_stmt(tok, ctx)?)
     }
@@ -1153,12 +1126,72 @@ fn if_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     Ok(Box::new(stmt))
 }
 
+fn switch_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let prev_case = ctx.case_labels.take();
+    ctx.case_labels = Some(Vec::new());
+    let prev_default = ctx.default_label.take();
+    let break_label = ctx.new_unique_name();
+    let prev_break = ctx.break_label.take();
+    ctx.break_label = Some(break_label.clone());
+    let loc = tok.loc;
+    tokenize::expect_punct(tok, "switch", ctx)?;
+    tokenize::expect_punct(tok, "(", ctx)?;
+    let cond = expr(tok, ctx)?;
+    tokenize::expect_punct(tok, ")", ctx)?;
+    let body = stmt(tok, ctx)?;
+    let case_labels = ctx.case_labels.take().unwrap();
+    let default_label = ctx.default_label.take();
+    let stmt = Stmt {
+        kind: StmtKind::SwitchStmt {
+            cond,
+            body,
+            case_labels,
+            default_label,
+            break_label,
+        },
+        loc,
+    };
+    ctx.case_labels = prev_case;
+    ctx.default_label = prev_default;
+    ctx.break_label = prev_break;
+    Ok(Box::new(stmt))
+}
+
+fn case_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let case_label = ctx.new_unique_name();
+    let loc = tok.loc;
+    tokenize::expect_punct(tok, "case", ctx)?;
+    let num = tokenize::expect_number(tok, ctx)?;
+    tokenize::expect_punct(tok, ":", ctx)?;
+    if ctx.case_labels.is_none() {
+        return Err(error_message("stray case", ctx, loc));
+    }
+    let case_labels = ctx.case_labels.as_mut().unwrap();
+    case_labels.push((num, case_label.clone()));
+    Ok(Box::new(Stmt {
+        kind: StmtKind::Label(case_label, stmt(tok, ctx)?),
+        loc,
+    }))
+}
+
+fn default_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let loc = tok.loc;
+    tokenize::expect_punct(tok, "default", ctx)?;
+    tokenize::expect_punct(tok, ":", ctx)?;
+    let default_label = ctx.new_unique_name();
+    ctx.default_label = Some(default_label.clone());
+    Ok(Box::new(Stmt {
+        kind: StmtKind::Label(default_label, stmt(tok, ctx)?),
+        loc,
+    }))
+}
+
 fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let break_label = ctx.new_unique_name();
-    let brk = ctx.break_label.take();
+    let prev_break = ctx.break_label.take();
     ctx.break_label = Some(break_label.clone());
     let continue_label = ctx.new_unique_name();
-    let cont = ctx.continue_label.take();
+    let prev_continue = ctx.continue_label.take();
     ctx.continue_label = Some(continue_label.clone());
     let loc = tok.loc;
     tokenize::expect_punct(tok, "for", ctx)?;
@@ -1194,17 +1227,17 @@ fn for_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         },
         loc,
     };
-    ctx.break_label = brk;
-    ctx.continue_label = cont;
+    ctx.break_label = prev_break;
+    ctx.continue_label = prev_continue;
     Ok(Box::new(stmt))
 }
 
 fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let break_label = ctx.new_unique_name();
-    let brk = ctx.break_label.take();
+    let prev_break = ctx.break_label.take();
     ctx.break_label = Some(break_label.clone());
     let continue_label = ctx.new_unique_name();
-    let cont = ctx.continue_label.take();
+    let prev_continue = ctx.continue_label.take();
     ctx.continue_label = Some(continue_label.clone());
     let loc = tok.loc;
     tokenize::expect_punct(tok, "while", ctx)?;
@@ -1221,9 +1254,70 @@ fn while_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         },
         loc,
     };
-    ctx.break_label = brk;
-    ctx.continue_label = cont;
+    ctx.break_label = prev_break;
+    ctx.continue_label = prev_continue;
     Ok(Box::new(stmt))
+}
+
+fn goto_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let loc = tok.loc;
+    tokenize::expect_punct(tok, "goto", ctx)?;
+    let ident = tokenize::expect_ident(tok, ctx)?;
+    let unique_name;
+    if let Some(name) = ctx.labels.get(ident) {
+        unique_name = name.clone();
+    } else {
+        unique_name = ctx.new_unique_name();
+        ctx.labels.insert(ident.to_owned(), unique_name.clone());
+    }
+    tokenize::expect_punct(tok, ";", ctx)?;
+    Ok(Box::new(Stmt {
+        kind: StmtKind::Goto(unique_name),
+        loc,
+    }))
+}
+
+fn break_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let loc = tok.loc;
+    tokenize::expect_punct(tok, "break", ctx)?;
+    tokenize::expect_punct(tok, ";", ctx)?;
+    if ctx.break_label.is_none() {
+        return Err(error_message("stray break", ctx, loc));
+    }
+    Ok(Box::new(Stmt {
+        kind: StmtKind::Goto(ctx.break_label.as_ref().unwrap().clone()),
+        loc,
+    }))
+}
+
+fn continue_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let loc = tok.loc;
+    tokenize::expect_punct(tok, "continue", ctx)?;
+    tokenize::expect_punct(tok, ";", ctx)?;
+    if ctx.continue_label.is_none() {
+        return Err(error_message("stray continue", ctx, loc));
+    }
+    Ok(Box::new(Stmt {
+        kind: StmtKind::Goto(ctx.continue_label.as_ref().unwrap().clone()),
+        loc,
+    }))
+}
+
+fn labeled_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
+    let loc = tok.loc;
+    let ident = tokenize::expect_ident(tok, ctx)?;
+    tokenize::expect_punct(tok, ":", ctx)?;
+    let unique_name;
+    if let Some(name) = ctx.labels.get(ident) {
+        unique_name = name.clone();
+    } else {
+        unique_name = ctx.new_unique_name();
+        ctx.labels.insert(ident.to_owned(), unique_name.clone());
+    }
+    Ok(Box::new(Stmt {
+        kind: StmtKind::Label(unique_name, stmt(tok, ctx)?),
+        loc,
+    }))
 }
 
 // expr = assign ("," expr)?

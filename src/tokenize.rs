@@ -170,6 +170,9 @@ fn convert_keyword(tok: &mut Token) {
         || tok.text == "goto"
         || tok.text == "break"
         || tok.text == "continue"
+        || tok.text == "switch"
+        || tok.text == "case"
+        || tok.text == "default"
     {
         tok.kind = TokenKind::Keyword;
     }
