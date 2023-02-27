@@ -94,6 +94,8 @@ pub enum BinaryOp {
     BITXOR, // ^
     LOGAND, // &&
     LOGOR,  // ||
+    SHL,    // <<
+    SHR,    // >>
     EQ,     // ==
     NE,     // !=
     LT,     // <
@@ -267,6 +269,15 @@ impl Expr {
                 } else {
                     Err(error_message("invalid operands", ctx, loc))
                 }
+            }
+            BinaryOp::SHL | BinaryOp::SHR => {
+                let ty = Rc::clone(&lhs.ty);
+                let expr = Expr {
+                    kind: ExprKind::Binary { op, lhs, rhs },
+                    ty,
+                    loc,
+                };
+                Ok(Box::new(expr))
             }
             BinaryOp::EQ
             | BinaryOp::NE
@@ -1334,6 +1345,7 @@ fn expr(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
 
 // assign = logor (assign-op assign)?
 // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "&=" | "|=" | "^="
+//           | "<<=" | ">>="
 fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     let lhs = logor(tok, ctx)?;
     let loc = tok.loc;
@@ -1355,6 +1367,10 @@ fn assign(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
         Expr::new_op_assign(BinaryOp::BITOR, lhs, assign(tok, ctx)?, ctx, loc)
     } else if tokenize::consume_punct(tok, "^=") {
         Expr::new_op_assign(BinaryOp::BITXOR, lhs, assign(tok, ctx)?, ctx, loc)
+    } else if tokenize::consume_punct(tok, "<<=") {
+        Expr::new_op_assign(BinaryOp::SHL, lhs, assign(tok, ctx)?, ctx, loc)
+    } else if tokenize::consume_punct(tok, ">>=") {
+        Expr::new_op_assign(BinaryOp::SHR, lhs, assign(tok, ctx)?, ctx, loc)
     } else {
         Ok(lhs)
     }
@@ -1442,25 +1458,44 @@ fn equality(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
     }
 }
 
-// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
+// relational = shift ("<" shift | "<=" shift | ">" shift | ">=" shift)*
 fn relational(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
-    let mut expr = add(tok, ctx)?;
+    let mut expr = shift(tok, ctx)?;
     loop {
         let loc = tok.loc;
         if tokenize::consume_punct(tok, "<") {
-            expr = Expr::new_binary(BinaryOp::LT, expr, add(tok, ctx)?, ctx, loc)?;
+            expr = Expr::new_binary(BinaryOp::LT, expr, shift(tok, ctx)?, ctx, loc)?;
             continue;
         }
         if tokenize::consume_punct(tok, "<=") {
-            expr = Expr::new_binary(BinaryOp::LE, expr, add(tok, ctx)?, ctx, loc)?;
+            expr = Expr::new_binary(BinaryOp::LE, expr, shift(tok, ctx)?, ctx, loc)?;
             continue;
         }
         if tokenize::consume_punct(tok, ">") {
-            expr = Expr::new_binary(BinaryOp::LT, add(tok, ctx)?, expr, ctx, loc)?;
+            expr = Expr::new_binary(BinaryOp::LT, shift(tok, ctx)?, expr, ctx, loc)?;
             continue;
         }
         if tokenize::consume_punct(tok, ">=") {
-            expr = Expr::new_binary(BinaryOp::LE, add(tok, ctx)?, expr, ctx, loc)?;
+            expr = Expr::new_binary(BinaryOp::LE, shift(tok, ctx)?, expr, ctx, loc)?;
+            continue;
+        }
+        break Ok(expr);
+    }
+}
+
+// shift = add ("<<" add | ">>" add)*
+fn shift(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Expr>> {
+    let mut expr = add(tok, ctx)?;
+    loop {
+        let loc = tok.loc;
+        if tokenize::consume_punct(tok, "<<") {
+            let rhs = add(tok, ctx)?;
+            expr = Expr::new_binary(BinaryOp::SHL, expr, rhs, ctx, loc)?;
+            continue;
+        }
+        if tokenize::consume_punct(tok, ">>") {
+            let rhs = add(tok, ctx)?;
+            expr = Expr::new_binary(BinaryOp::SHR, expr, rhs, ctx, loc)?;
             continue;
         }
         break Ok(expr);

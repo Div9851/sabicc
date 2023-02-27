@@ -445,6 +445,14 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
                     writeln!(&mut output, "  setle al").unwrap();
                     writeln!(&mut output, "  movzb rax, al").unwrap();
                 }
+                BinaryOp::SHL => {
+                    writeln!(&mut output, "  mov rcx, rdi").unwrap();
+                    writeln!(&mut output, "  shl {}, cl", ax).unwrap();
+                }
+                BinaryOp::SHR => {
+                    writeln!(&mut output, "  mov rcx, rdi").unwrap();
+                    writeln!(&mut output, "  sar {}, cl", ax).unwrap();
+                }
             };
         }
         ExprKind::Unary { op, expr: operand } => {

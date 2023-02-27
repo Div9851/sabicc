@@ -123,8 +123,12 @@ fn is_ident2(c: u8) -> bool {
 
 // Read a punctuator token and returns its length.
 fn read_punct(bytes: &[u8]) -> usize {
-    if bytes.starts_with(b"==")
+    if bytes.starts_with(b"<<=") || bytes.starts_with(b">>=") {
+        3
+    } else if bytes.starts_with(b"==")
         || bytes.starts_with(b"!=")
+        || bytes.starts_with(b"<<")
+        || bytes.starts_with(b">>")
         || bytes.starts_with(b"<=")
         || bytes.starts_with(b">=")
         || bytes.starts_with(b"->")
