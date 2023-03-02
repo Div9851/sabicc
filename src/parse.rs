@@ -148,6 +148,7 @@ pub enum ExprKind {
         then: Box<Expr>,
         els: Box<Expr>,
     },
+    MemZero(Obj),
 }
 
 #[derive(Debug)]
@@ -557,6 +558,14 @@ impl Expr {
         Box::new(Expr {
             kind: ExprKind::Cast(expr),
             ty: Rc::clone(convert_to),
+            loc,
+        })
+    }
+
+    fn new_memzero(obj: Obj, loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::MemZero(obj),
+            ty: Type::new_void().wrap(),
             loc,
         })
     }
@@ -980,9 +989,10 @@ fn declaration(
         let obj = ctx.new_lvar(&decl);
         if tokenize::consume_punct(tok, "=") {
             let init = initializer(tok, ctx, &obj.ty)?;
-            let lvar_init = init.to_lvar_init(&obj.ty, obj.get_offset(), loc);
+            let init = init.to_lvar_init(&obj.ty, obj.get_offset(), loc);
+            let init = Expr::new_comma(Expr::new_memzero(obj, loc), init, loc);
             stmt_vec.push(Box::new(Stmt {
-                kind: StmtKind::ExprStmt(lvar_init),
+                kind: StmtKind::ExprStmt(init),
                 loc,
             }))
         }
@@ -1003,6 +1013,9 @@ fn initializer(
         tokenize::expect_punct(tok, "{", ctx)?;
         let mut init = Vec::new();
         for i in 0..ty.get_array_len() {
+            if tokenize::equal_punct(tok, "}") {
+                break;
+            }
             if i > 0 {
                 tokenize::expect_punct(tok, ",", ctx)?;
             }

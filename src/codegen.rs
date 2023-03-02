@@ -560,6 +560,14 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             write!(&mut output, "{}", gen_expr(els, ctx)?).unwrap();
             writeln!(&mut output, ".L.end.{}:", id).unwrap();
         }
+        ExprKind::MemZero(obj) => {
+            // `rep stosb` is equivalent to `memset(rdi, al, rcx)`.
+            let ty = obj.ty.borrow();
+            writeln!(&mut output, "  mov rcx, {}", ty.size.unwrap()).unwrap();
+            writeln!(&mut output, "  lea rdi, [rbp-{}]", obj.get_offset()).unwrap();
+            writeln!(&mut output, "  mov al, 0").unwrap();
+            writeln!(&mut output, "  rep stosb").unwrap();
+        }
     };
     Ok(output)
 }
