@@ -990,6 +990,11 @@ fn declaration(
         if tokenize::consume_punct(tok, "=") {
             let init = initializer(tok, ctx, &obj.ty)?;
             let init = init.to_lvar_init(&obj.ty, obj.get_offset(), loc);
+
+            // If a partial initializer list is given, the standard requires
+            // that unspecified elements are set to 0. Here, we simply
+            // zero-initialize the entire memory region of a variable before
+            // initializing it with user-supplied values.
             let init = Expr::new_comma(Expr::new_memzero(obj, loc), init, loc);
             stmt_vec.push(Box::new(Stmt {
                 kind: StmtKind::ExprStmt(init),
