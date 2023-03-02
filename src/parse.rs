@@ -1006,6 +1006,16 @@ fn declaration(
     Ok(stmt_vec)
 }
 
+fn skip_excess_element(tok: &mut &Token, ctx: &mut Context) -> Result<()> {
+    if tokenize::consume_punct(tok, "{") {
+        skip_excess_element(tok, ctx)?;
+        tokenize::expect_punct(tok, "}", ctx)?;
+    } else {
+        assign(tok, ctx)?;
+    }
+    Ok(())
+}
+
 // initializer = "{" initializer ("," initializer)* "}"
 //             | assign
 fn initializer(
@@ -1017,16 +1027,19 @@ fn initializer(
     if ty.is_array() {
         tokenize::expect_punct(tok, "{", ctx)?;
         let mut init = Vec::new();
-        for i in 0..ty.get_array_len() {
-            if tokenize::equal_punct(tok, "}") {
-                break;
-            }
+        let mut i = 0;
+        let array_len = ty.get_array_len();
+        while !tokenize::consume_punct(tok, "}") {
             if i > 0 {
                 tokenize::expect_punct(tok, ",", ctx)?;
             }
-            init.push(initializer(tok, ctx, ty.get_base_ty())?);
+            if i < array_len {
+                init.push(initializer(tok, ctx, ty.get_base_ty())?);
+            } else {
+                skip_excess_element(tok, ctx)?;
+            }
+            i += 1;
         }
-        tokenize::expect_punct(tok, "}", ctx)?;
         return Ok(Box::new(Initializer::Compound(init)));
     }
     Ok(Box::new(Initializer::Scalar(assign(tok, ctx)?)))
