@@ -323,12 +323,12 @@ fn gen_stmt(stmt: &Stmt, ctx: &mut Context) -> Result<String> {
             writeln!(&mut output, "{}:", break_label).unwrap();
             Ok(output)
         }
-        StmtKind::Label(label, stmt) => {
+        StmtKind::LabeledStmt(label, stmt) => {
             writeln!(&mut output, "{}:", label).unwrap();
             write!(&mut output, "{}", gen_stmt(stmt, ctx)?).unwrap();
             Ok(output)
         }
-        StmtKind::Goto(label) => {
+        StmtKind::GotoStmt(label) => {
             writeln!(&mut output, "  jmp {}", label).unwrap();
             Ok(output)
         }
@@ -340,6 +340,7 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
     let mut output = String::new();
     writeln!(&mut output, "  .loc 1 {}", ctx.line_no[expr.loc] + 1).unwrap();
     match &expr.kind {
+        ExprKind::NullExpr => {}
         ExprKind::StmtExpr(stmt_vec) => {
             for stmt in stmt_vec {
                 write!(&mut output, "{}", gen_stmt(stmt, ctx)?).unwrap();
@@ -525,23 +526,23 @@ fn gen_expr(expr: &Expr, ctx: &mut Context) -> Result<String> {
             let to_ty = &expr.ty.borrow().kind;
             match from_ty {
                 TypeKind::Char => match to_ty {
-                    TypeKind::Long => writeln!(&mut output, "{}", i32i64).unwrap(),
+                    TypeKind::Long => writeln!(&mut output, "  {}", i32i64).unwrap(),
                     _ => {}
                 },
                 TypeKind::Short => match to_ty {
-                    TypeKind::Char => writeln!(&mut output, "{}", i32i8).unwrap(),
-                    TypeKind::Long => writeln!(&mut output, "{}", i32i64).unwrap(),
+                    TypeKind::Char => writeln!(&mut output, "  {}", i32i8).unwrap(),
+                    TypeKind::Long => writeln!(&mut output, "  {}", i32i64).unwrap(),
                     _ => {}
                 },
                 TypeKind::Int => match to_ty {
-                    TypeKind::Char => writeln!(&mut output, "{}", i32i8).unwrap(),
-                    TypeKind::Short => writeln!(&mut output, "{}", i32i16).unwrap(),
-                    TypeKind::Long => writeln!(&mut output, "{}", i32i64).unwrap(),
+                    TypeKind::Char => writeln!(&mut output, "  {}", i32i8).unwrap(),
+                    TypeKind::Short => writeln!(&mut output, "  {}", i32i16).unwrap(),
+                    TypeKind::Long => writeln!(&mut output, "  {}", i32i64).unwrap(),
                     _ => {}
                 },
                 TypeKind::Long => match to_ty {
-                    TypeKind::Char => writeln!(&mut output, "{}", i32i8).unwrap(),
-                    TypeKind::Short => writeln!(&mut output, "{}", i32i16).unwrap(),
+                    TypeKind::Char => writeln!(&mut output, "  {}", i32i8).unwrap(),
+                    TypeKind::Short => writeln!(&mut output, "  {}", i32i16).unwrap(),
                     _ => {}
                 },
                 _ => {}

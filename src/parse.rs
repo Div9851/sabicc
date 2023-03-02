@@ -62,8 +62,8 @@ pub enum StmtKind {
         break_label: String,
         continue_label: String,
     },
-    Label(String, Box<Stmt>),
-    Goto(String),
+    LabeledStmt(String, Box<Stmt>),
+    GotoStmt(String),
 }
 
 #[derive(Debug)]
@@ -113,6 +113,7 @@ pub enum UnaryOp {
 
 #[derive(Debug)]
 pub enum ExprKind {
+    NullExpr,
     StmtExpr(Vec<Box<Stmt>>),
     Assign {
         lhs: Box<Expr>,
@@ -156,6 +157,42 @@ pub struct Expr {
     pub loc: usize,
 }
 
+// This enum represents a variable initializer. Since initializers
+// can be nested (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this enum
+// is a tree data structure.
+#[derive(Debug)]
+pub enum Initializer {
+    Scalar(Box<Expr>),
+    Compound(Vec<Box<Initializer>>),
+}
+
+impl Initializer {
+    fn to_lvar_init(self, ty: &Rc<RefCell<Type>>, mut offset: usize, loc: usize) -> Box<Expr> {
+        match self {
+            Initializer::Compound(expr_vec) => {
+                let ty = ty.borrow();
+                let base_ty = ty.get_base_ty();
+                let base_ty_size = base_ty.borrow().size.unwrap();
+                let mut lhs = Expr::new_null(loc);
+                for expr in expr_vec {
+                    let rhs = expr.to_lvar_init(base_ty, offset, loc);
+                    lhs = Expr::new_comma(lhs, rhs, loc);
+                    offset -= base_ty_size;
+                }
+                lhs
+            }
+            Initializer::Scalar(expr) => {
+                let obj = Obj {
+                    kind: ObjKind::Local(offset),
+                    ty: Rc::clone(&ty),
+                };
+                let var = Expr::new_var(obj, loc);
+                Expr::new_assign(var, expr, loc)
+            }
+        }
+    }
+}
+
 fn get_common_type(ty1: &Rc<RefCell<Type>>, ty2: &Rc<RefCell<Type>>) -> Rc<RefCell<Type>> {
     let ty1_size = ty1.borrow().size.unwrap();
     let ty2_size = ty2.borrow().size.unwrap();
@@ -184,7 +221,14 @@ fn usual_arith_conv(lhs: Box<Expr>, rhs: Box<Expr>) -> (Box<Expr>, Box<Expr>) {
 }
 
 impl Expr {
-    fn new_assign(lhs: Box<Expr>, rhs: Box<Expr>, loc: usize) -> Box<Expr> {
+    pub fn new_null(loc: usize) -> Box<Expr> {
+        Box::new(Expr {
+            kind: ExprKind::NullExpr,
+            ty: Type::new_void().wrap(),
+            loc,
+        })
+    }
+    pub fn new_assign(lhs: Box<Expr>, rhs: Box<Expr>, loc: usize) -> Box<Expr> {
         let result_ty = Rc::clone(&lhs.ty);
         let rhs = Expr::new_cast(rhs, &lhs.ty, loc);
         Box::new(Expr {
@@ -468,7 +512,7 @@ impl Expr {
         }))
     }
 
-    fn new_var(obj: Obj, loc: usize) -> Box<Expr> {
+    pub fn new_var(obj: Obj, loc: usize) -> Box<Expr> {
         let ty = Rc::clone(&obj.ty);
         Box::new(Expr {
             kind: ExprKind::Var(obj),
@@ -665,8 +709,9 @@ fn is_func_def(tok: &mut &Token, ctx: &mut Context) -> Result<bool> {
     let dummy = Type::new_int().wrap();
     ctx.enter_scope();
     let decl = declarator(&mut cur, &dummy, ctx)?;
+    let decl_ty = decl.ty.borrow();
     ctx.leave_scope();
-    Ok(decl.ty.borrow().is_func() && !tokenize::equal_punct(cur, ";"))
+    Ok(decl_ty.is_func() && !tokenize::equal_punct(cur, ";"))
 }
 
 // declspec = ("void" | "char" | "short" | "int" | "long" |
@@ -915,13 +960,13 @@ fn typename(tok: &mut &Token, ctx: &mut Context) -> Result<Rc<RefCell<Type>>> {
     abstract_declarator(tok, &spec.ty, ctx)
 }
 
-// declaration = declspec (declarator ("=" expr)? ("," declarator ("=" expr)?)*)? ";"
+// declaration = declspec (declarator ("=" initializer)? ("," declarator ("=" initializer?)*)? ";"
 fn declaration(
     tok: &mut &Token,
     ctx: &mut Context,
     base_ty: &Rc<RefCell<Type>>,
 ) -> Result<Vec<Box<Stmt>>> {
-    let mut init = Vec::new();
+    let mut stmt_vec = Vec::new();
     let mut count = 0;
     while !tokenize::consume_punct(tok, ";") {
         if count > 0 {
@@ -934,18 +979,39 @@ fn declaration(
         }
         let obj = ctx.new_lvar(&decl);
         if tokenize::consume_punct(tok, "=") {
-            let lhs = Expr::new_var(obj, loc);
-            let rhs = assign(tok, ctx)?;
-            let expr = Expr::new_assign(lhs, rhs, loc);
-            let stmt = Box::new(Stmt {
-                kind: StmtKind::ExprStmt(expr),
+            let init = initializer(tok, ctx, &obj.ty)?;
+            let lvar_init = init.to_lvar_init(&obj.ty, obj.get_offset(), loc);
+            stmt_vec.push(Box::new(Stmt {
+                kind: StmtKind::ExprStmt(lvar_init),
                 loc,
-            });
-            init.push(stmt);
+            }))
         }
         count += 1;
     }
-    Ok(init)
+    Ok(stmt_vec)
+}
+
+// initializer = "{" initializer ("," initializer)* "}"
+//             | assign
+fn initializer(
+    tok: &mut &Token,
+    ctx: &mut Context,
+    ty: &Rc<RefCell<Type>>,
+) -> Result<Box<Initializer>> {
+    let ty = ty.borrow();
+    if ty.is_array() {
+        tokenize::expect_punct(tok, "{", ctx)?;
+        let mut init = Vec::new();
+        for i in 0..ty.get_array_len() {
+            if i > 0 {
+                tokenize::expect_punct(tok, ",", ctx)?;
+            }
+            init.push(initializer(tok, ctx, ty.get_base_ty())?);
+        }
+        tokenize::expect_punct(tok, "}", ctx)?;
+        return Ok(Box::new(Initializer::Compound(init)));
+    }
+    Ok(Box::new(Initializer::Scalar(assign(tok, ctx)?)))
 }
 
 // Returns true if a given token represents a type.
@@ -1251,7 +1317,7 @@ fn case_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let case_labels = ctx.case_labels.as_mut().unwrap();
     case_labels.push((num, case_label.clone()));
     Ok(Box::new(Stmt {
-        kind: StmtKind::Label(case_label, stmt(tok, ctx)?),
+        kind: StmtKind::LabeledStmt(case_label, stmt(tok, ctx)?),
         loc,
     }))
 }
@@ -1263,7 +1329,7 @@ fn default_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     let default_label = ctx.new_unique_name();
     ctx.default_label = Some(default_label.clone());
     Ok(Box::new(Stmt {
-        kind: StmtKind::Label(default_label, stmt(tok, ctx)?),
+        kind: StmtKind::LabeledStmt(default_label, stmt(tok, ctx)?),
         loc,
     }))
 }
@@ -1354,7 +1420,7 @@ fn goto_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
     }
     tokenize::expect_punct(tok, ";", ctx)?;
     Ok(Box::new(Stmt {
-        kind: StmtKind::Goto(unique_name),
+        kind: StmtKind::GotoStmt(unique_name),
         loc,
     }))
 }
@@ -1367,7 +1433,7 @@ fn break_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         return Err(error_message("stray break", ctx, loc));
     }
     Ok(Box::new(Stmt {
-        kind: StmtKind::Goto(ctx.break_label.as_ref().unwrap().clone()),
+        kind: StmtKind::GotoStmt(ctx.break_label.as_ref().unwrap().clone()),
         loc,
     }))
 }
@@ -1380,7 +1446,7 @@ fn continue_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         return Err(error_message("stray continue", ctx, loc));
     }
     Ok(Box::new(Stmt {
-        kind: StmtKind::Goto(ctx.continue_label.as_ref().unwrap().clone()),
+        kind: StmtKind::GotoStmt(ctx.continue_label.as_ref().unwrap().clone()),
         loc,
     }))
 }
@@ -1397,7 +1463,7 @@ fn labeled_stmt(tok: &mut &Token, ctx: &mut Context) -> Result<Box<Stmt>> {
         ctx.labels.insert(ident.to_owned(), unique_name.clone());
     }
     Ok(Box::new(Stmt {
-        kind: StmtKind::Label(unique_name, stmt(tok, ctx)?),
+        kind: StmtKind::LabeledStmt(unique_name, stmt(tok, ctx)?),
         loc,
     }))
 }

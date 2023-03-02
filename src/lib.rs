@@ -29,6 +29,13 @@ impl Obj {
     fn is_typedef(&self) -> bool {
         matches!(self.kind, ObjKind::TypeDef)
     }
+
+    fn get_offset(&self) -> usize {
+        match &self.kind {
+            ObjKind::Local(offset) => *offset,
+            _ => panic!("try to get an offset of a non lvar object"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -288,6 +295,13 @@ impl Type {
 
     pub fn is_enum(&self) -> bool {
         matches!(self.kind, TypeKind::Enum)
+    }
+
+    pub fn get_array_len(&self) -> usize {
+        match &self.kind {
+            TypeKind::Array(_, len) => len.unwrap(),
+            _ => panic!("try to get length of a non array type"),
+        }
     }
 
     pub fn get_base_ty(&self) -> &Rc<RefCell<Type>> {
